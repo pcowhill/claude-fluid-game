@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Harvest the Hazard — v0.1</title>
+<style>
+  :root{
+    --bg:#0a0d13;
+    --panel:#121724;
+    --panel2:#0e1320;
+    --line:#222b3d;
+    --text:#d7e0f0;
+    --muted:#8493ac;
+    --green:#5dd47b;
+    --red:#ff6b5e;
+    --amber:#ffb24a;
+    --cyan:#3fe0d0;
+    --blue:#4aa3ff;
+    --gold:#ffe27a;
+    --purple:#b06bff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;}
+  #app{display:flex;flex-direction:column;align-items:center;min-height:100vh;padding:10px;gap:8px;}
+
+  /* ---------- Top bar / HUD ---------- */
+  #topbar{width:960px;max-width:100%;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:8px 12px;display:flex;align-items:center;gap:18px;flex-wrap:wrap;}
+  .stat{display:flex;flex-direction:column;line-height:1.15;min-width:74px;}
+  .stat .label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+  .stat .val{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;}
+  #energyWrap{min-width:210px;flex:1;}
+  #energyBar{height:9px;background:#0c1018;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-top:4px;}
+  #energyFill{height:100%;width:0%;background:linear-gradient(90deg,#2e7d46,var(--green));transition:width .15s linear;}
+  .pos{color:var(--green)} .neg{color:var(--red)} .net.pos{color:var(--green)} .net.neg{color:var(--red)}
+  #beaconStat{display:none;min-width:150px;}
+  #beaconBar{height:9px;background:#0c1018;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-top:4px;}
+  #beaconFill{height:100%;width:0%;background:linear-gradient(90deg,#9a7a16,var(--gold));}
+  #ctrls{display:flex;gap:6px;margin-left:auto;}
+  .cbtn{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;
+    padding:6px 12px;font-size:13px;cursor:pointer;font-weight:600;}
+  .cbtn:hover{border-color:#3a4a66;}
+  .cbtn.active{border-color:var(--cyan);color:var(--cyan);}
+
+  /* ---------- Canvas ---------- */
+  #board{position:relative;}
+  canvas{display:block;background:#070a0f;border:1px solid var(--line);border-radius:10px;cursor:crosshair;}
+
+  /* ---------- Toolbar ---------- */
+  #toolbar{width:960px;max-width:100%;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:stretch;}
+  .tool{flex:1;min-width:108px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    padding:7px 9px;cursor:pointer;display:flex;flex-direction:column;gap:2px;transition:border-color .1s;}
+  .tool:hover{border-color:#3a4a66;}
+  .tool.sel{border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan) inset;}
+  .tool .tname{font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px;}
+  .tool .tcost{font-size:11px;color:var(--amber);font-variant-numeric:tabular-nums;}
+  .tool .tdesc{font-size:10px;color:var(--muted);line-height:1.25;}
+  .tool .swatch{width:11px;height:11px;border-radius:3px;display:inline-block;}
+  .tool.del .tname{color:var(--red);} .tool.del .swatch{background:var(--red);}
+  .tool.cant{opacity:.5;}
+
+  #hint{width:960px;max-width:100%;color:var(--muted);font-size:12px;text-align:center;min-height:16px;}
+
+  /* ---------- Overlays ---------- */
+  .overlay{position:fixed;inset:0;background:rgba(5,8,13,.82);display:flex;align-items:center;
+    justify-content:center;z-index:20;padding:20px;}
+  .overlay.hidden{display:none;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px 26px;
+    max-width:560px;width:100%;box-shadow:0 18px 60px rgba(0,0,0,.5);}
+  .card h1{margin:0 0 6px;font-size:24px;}
+  .card h2{margin:0 0 10px;font-size:15px;color:var(--cyan);font-weight:600;letter-spacing:.02em;}
+  .card p,.card li{font-size:13.5px;line-height:1.5;color:#c3cee0;}
+  .card ul{margin:8px 0 14px;padding-left:20px;}
+  .card b{color:#fff;}
+  .key{color:var(--green);} .danger{color:var(--red);} .obj{color:var(--gold);}
+  .bigbtn{display:inline-block;margin-top:8px;background:var(--cyan);color:#04130f;border:none;
+    border-radius:9px;padding:11px 22px;font-size:15px;font-weight:800;cursor:pointer;}
+  .bigbtn.win{background:var(--gold);} .bigbtn.lose{background:var(--red);color:#1a0606;}
+  #winCard h1{color:var(--gold);} #loseCard h1{color:var(--red);}
+  .sub{color:var(--muted);font-size:12px;margin-top:14px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- HUD -->
+  <div id="topbar">
+    <div id="energyWrap">
+      <div class="stat" style="min-width:0">
+        <span class="label">Stored Energy</span>
+        <span class="val"><span id="energyVal">0</span> <span style="font-size:12px;color:var(--muted)">/ <span id="energyCap">0</span></span></span>
+      </div>
+      <div id="energyBar"><div id="energyFill"></div></div>
+    </div>
+    <div class="stat"><span class="label">Income</span><span class="val pos">+<span id="incomeVal">0</span><span style="font-size:11px">/s</span></span></div>
+    <div class="stat"><span class="label">Consumption</span><span class="val neg">-<span id="consVal">0</span><span style="font-size:11px">/s</span></span></div>
+    <div class="stat"><span class="label">Net</span><span class="val net" id="netStat">+0/s</span></div>
+    <div class="stat" id="beaconStat">
+      <span class="label">Beacon Charge</span>
+      <span class="val"><span id="beaconVal">0</span>%</span>
+      <div id="beaconBar"><div id="beaconFill"></div></div>
+    </div>
+    <div id="ctrls">
+      <button class="cbtn" id="btnPause">⏸ Pause</button>
+      <button class="cbtn" id="btnSpeed">▶ 1x</button>
+    </div>
+  </div>
+
+  <!-- Game board -->
+  <div id="board">
+    <canvas id="cv"></canvas>
+  </div>
+
+  <!-- Build toolbar (populated by JS) -->
+  <div id="toolbar"></div>
+  <div id="hint">Select a tool, then click a cell to build. Right-click a structure to remove it (partial refund).</div>
+</div>
+
+<!-- How to play -->
+<div class="overlay" id="howto">
+  <div class="card">
+    <h1>Harvest the Hazard</h1>
+    <h2>The hazard is your enemy — and your only fuel.</h2>
+    <p>A glowing fluid floods out of the <b style="color:var(--purple)">Emitter</b> in the low basin and spreads downhill, pooling deep. You don't want to wipe it out — you want to <b>farm a controlled flood.</b></p>
+    <ul>
+      <li><b style="color:var(--amber)">Extractors</b> turn fluid into energy. <span class="key">Deeper fluid = more energy</span> — but too deep and the fluid <span class="danger">destroys them.</span></li>
+      <li><b style="color:var(--cyan)">Relays</b> extend your network so you can reach distant ground. Everything must stay <b>connected</b> to the Core to work.</li>
+      <li><b style="color:var(--red)">Blasters</b> burn energy to push fluid back and protect your line.</li>
+      <li><b style="color:#9aa3b2">Barriers</b> are cheap walls — <b>dam a basin</b> to grow a deep, lucrative reservoir.</li>
+      <li><b class="obj">Beacon</b> — build it in the deadly basin and keep it powered to charge it. <span class="obj">Charge it to 100% to WIN.</span></li>
+    </ul>
+    <p><b class="danger">You lose if the fluid submerges your Core Base.</b> Keep it off the high ground!</p>
+    <button class="bigbtn" id="btnStart">Start Harvesting</button>
+    <div class="sub">Mouse only • Use ▶ to fast-forward • Right-click to sell a structure</div>
+  </div>
+</div>
+
+<!-- Win -->
+<div class="overlay hidden" id="win">
+  <div class="card" id="winCard">
+    <h1>Beacon Charged — You Win!</h1>
+    <p>You charged the Beacon in the heart of the hazard while keeping the flood at bay. Masterful flood management.</p>
+    <p class="sub" id="winStats"></p>
+    <button class="bigbtn win" id="btnRestartWin">Play Again</button>
+  </div>
+</div>
+
+<!-- Lose -->
+<div class="overlay hidden" id="lose">
+  <div class="card" id="loseCard">
+    <h1>Core Submerged — Game Over</h1>
+    <p>The flood overran your Core Base. The hazard waits for no one.</p>
+    <p class="sub" id="loseStats"></p>
+    <button class="bigbtn lose" id="btnRestartLose">Try Again</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================================
+   HARVEST THE HAZARD  —  v0.1
+   Single-file vanilla JS + Canvas. No dependencies. Open index.html directly.
+   ALL tunable gameplay numbers live in CONFIG below.
+   ===================================================================================== */
+
+const CONFIG = {
+  /* ---- Grid / rendering ---- */
+  cols: 48, rows: 32, cellPx: 20,          // 48x32 grid, 20px cells => 960x640 board
+
+  /* ---- Terrain ---- */
+  levelHeight: 1.6,        // fluid "surface" units added per elevation level (height of one step)
+  // Elevation palette (index 0=basin .. 3=plateau). Dark, flat, with subtle relief drawn in code.
+  levelColors: ['#1b2030', '#262d40', '#333c54', '#46506b'],
+
+  /* ---- Fluid simulation ---- */
+  fluidTickMs: 100,        // one cellular-automaton step every 100ms at 1x (10 ticks/s)
+  emitterRate: 7.0,        // fluid depth added at the Emitter cell per second
+  basinPrefill: 2.6,       // basin (elev 0) starts pre-flooded to this depth: instant deep hazard
+  flowRate: 0.25,          // share of surface-difference that flows per tick (<=0.25 keeps it stable)
+  minDepth: 0.0008,        // denormal guard only (mass is conserved; do NOT cull the flood front)
+  fluidRenderMin: 0.05,    // fluid shallower than this is invisible (render-only, no mass loss)
+  fluidVisMax: 6.0,        // depth that renders at full intensity
+
+  /* ---- Economy ---- */
+  startEnergy: 260,
+  coreIncome: 1.5,         // passive energy/s from the Core
+  extractorYield: 2.3,     // energy/s per unit of fluid depth under an Extractor
+  extractorYieldCap: 34,   // max energy/s a single Extractor can produce
+
+  /* ---- Risk thresholds (fluid depth) ---- */
+  riskDepth: 4.5,          // Extractor enters flashing "at risk" state at/above this depth
+  destroyDepth: 7.5,       // Extractor is destroyed at/above this depth
+  coreSubmergeDepth: 0.8,  // Core is lost when fluid depth on its cell reaches this
+
+  /* ---- Blaster ---- */
+  blasterRange: 5.0,       // cells
+  blasterShotPower: 0.85,  // fluid depth removed per shot
+  blasterFireRate: 4.0,    // shots/s
+  blasterShotCost: 1.1,    // energy per shot
+  blasterMinTarget: 0.25,  // won't shoot fluid shallower than this
+
+  /* ---- Beacon (win objective) ---- */
+  beaconDraw: 9.0,         // energy/s the Beacon needs to charge
+  beaconChargeRate: 3.5,   // % charge per second while powered (~29s of uptime to win)
+
+  /* ---- Network ---- */
+  linkRange: { core:6.5, extractor:4.0, relay:9.0, blaster:4.5, beacon:4.5 },
+
+  /* ---- Build costs / refund ---- */
+  cost: { extractor:55, relay:25, blaster:80, barrier:10, beacon:300 },
+  refundFrac: 0.5,
+
+  /* ---- Key locations (hi-res grid coords) ---- */
+  core:    { c:4,  r:16 },
+  emitter: { c:42, r:16 },
+
+  /* ---- Speed ---- */
+  speeds: [1, 2, 3],
+  maxStepsPerFrame: 9,
+};
+
+/* -------------------------------------------------------------------------------------
+   TERRAIN MAP  (readable data structure)
+   Authored at 24x16, each char = elevation level 0..3, then upscaled x2 to 48x32.
+     3 = plateau (highest, the Core's home)   2 = hills
+     1 = lowland                              0 = basin (lowest, the Emitter & Beacon)
+   Left = Core plateau, right = Emitter basin. Vertical '2' ridges form chokepoints.
+   ------------------------------------------------------------------------------------- */
+const MAP24 = [
+  "333332211211121111111111", // 0
+  "333332211211121111111111", // 1
+  "333332211211111111111111", // 2  (chokepoint gap in right ridge)
+  "333332211211111111100000", // 3
+  "333332211211121111100000", // 4
+  "333332211211121111100000", // 5
+  "333332211211121110000000", // 6
+  "333332211111121110000000", // 7  (chokepoint gap in left ridge) — Emitter row
+  "333332211111121110000000", // 8  (chokepoint gap in left ridge) — Emitter row
+  "333332211211121110000000", // 9
+  "333332211211121111100000", // 10
+  "333332211211121111100000", // 11
+  "333332211211111111100000", // 12 (chokepoint gap in right ridge)
+  "333332211211111111111111", // 13 (chokepoint gap in right ridge)
+  "333332211211121111111111", // 14
+  "333332211211121111111111", // 15
+];
+
+/* =====================================================================================
+   STATE
+   ===================================================================================== */
+const C = CONFIG.cols, R = CONFIG.rows, N = C * R;
+const idx = (c, r) => r * C + c;
+const inb = (c, r) => c >= 0 && c < C && r >= 0 && r < R;
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const dist = (a, b) => Math.hypot(a.c - b.c, a.r - b.r);
+
+let elev   = new Uint8Array(N);     // terrain elevation level 0..3
+let depth  = new Float32Array(N);   // fluid depth above the floor
+let delta  = new Float32Array(N);   // scratch buffer for fluid flow
+let isWall = new Uint8Array(N);     // barrier present (blocks fluid)
+let occ    = new Array(N).fill(null); // structure occupying a cell (or null)
+
+let structures = [];   // {type, c, r, active, cooldown, target, charge}
+let core = null;       // reference to the core structure
+let beacon = null;     // reference to the beacon (or null)
+
+let game = {
+  energy: CONFIG.startEnergy,
+  energyPeak: CONFIG.startEnergy,
+  income: 0, cons: 0,        // displayed per-second rates
+  tool: 'extractor',
+  paused: false,
+  speedIdx: 0,
+  over: null,                // null | 'win' | 'lose'
+  time: 0,                   // elapsed game seconds
+  hover: { c:-1, r:-1 },
+  shots: [],                 // transient blaster shot effects {x1,y1,x2,y2,life}
+};
+
+/* =====================================================================================
+   TERRAIN BUILD
+   ===================================================================================== */
+function buildTerrain() {
+  if (MAP24.length !== 16) throw new Error('MAP24 must have 16 rows, has ' + MAP24.length);
+  MAP24.forEach((row, i) => { if (row.length !== 24) throw new Error('MAP24 row ' + i + ' must be 24 chars, is ' + row.length); });
+  for (let r = 0; r < R; r++) {
+    for (let c = 0; c < C; c++) {
+      const ch = MAP24[r >> 1][c >> 1];
+      elev[idx(c, r)] = (+ch) | 0;
+    }
+  }
+}
+
+/* =====================================================================================
+   STRUCTURE DEFINITIONS
+   ===================================================================================== */
+const NETWORK_TYPES = { core:1, extractor:1, relay:1, blaster:1, beacon:1 };
+const TOOLS = [
+  { type:'extractor', name:'Extractor', color:'#ffb24a', desc:'Harvests fluid → energy. Deeper = more, but floods.' },
+  { type:'relay',     name:'Relay',     color:'#3fe0d0', desc:'Extends network range. Produces nothing.' },
+  { type:'blaster',   name:'Blaster',   color:'#ff6b5e', desc:'Burns energy to push fluid back.' },
+  { type:'barrier',   name:'Barrier',   color:'#9aa3b2', desc:'Cheap wall. Dam basins / block flow.' },
+  { type:'beacon',    name:'Beacon',    color:'#ffe27a', desc:'WIN objective. Build in basin, keep powered.' },
+];
+
+/* =====================================================================================
+   PLACEMENT VALIDITY
+   ===================================================================================== */
+function placeValidity(type, c, r) {
+  if (!inb(c, r)) return { ok:false, reason:'Out of bounds' };
+  const i = idx(c, r);
+  if (c === CONFIG.emitter.c && r === CONFIG.emitter.r) return { ok:false, reason:'Cannot build on the Emitter' };
+  if (occ[i]) return { ok:false, reason:'Cell occupied' };
+  if (isWall[i]) return { ok:false, reason:'Cell occupied' };
+  const cost = CONFIG.cost[type];
+  if (game.energy < cost) return { ok:false, reason:'Not enough energy (' + cost + ')' };
+  if (type === 'beacon') {
+    if (beacon) return { ok:false, reason:'Beacon already placed' };
+    if (elev[i] !== 0) return { ok:false, reason:'Beacon must go in the basin (lowest ground)' };
+  }
+  return { ok:true };
+}
+
+function placeStructure(type, c, r) {
+  const v = placeValidity(type, c, r);
+  if (!v.ok) return false;
+  const i = idx(c, r);
+  game.energy -= CONFIG.cost[type];
+  if (type === 'barrier') {
+    isWall[i] = 1;
+    depth[i] = 0;
+    const s = { type, c, r };
+    occ[i] = s;
+    structures.push(s);
+  } else {
+    const s = { type, c, r, active:false, cooldown:0, target:null, charge:0 };
+    if (type === 'beacon') beacon = s;
+    occ[i] = s;
+    structures.push(s);
+  }
+  recomputeNetwork();
+  return true;
+}
+
+function removeAt(c, r) {
+  if (!inb(c, r)) return false;
+  const i = idx(c, r);
+  const s = occ[i];
+  if (!s) return false;
+  if (s.type === 'core') return false; // cannot sell the core
+  game.energy += Math.round(CONFIG.cost[s.type] * CONFIG.refundFrac);
+  if (s.type === 'barrier') isWall[i] = 0;
+  if (s === beacon) { beacon = null; updateBeaconHud(); }
+  occ[i] = null;
+  structures = structures.filter(x => x !== s);
+  recomputeNetwork();
+  return true;
+}
+
+/* =====================================================================================
+   NETWORK CONNECTIVITY  (BFS from Core; Relays provide long reach)
+   Two structures link if their distance <= max(range A, range B).
+   ===================================================================================== */
+function recomputeNetwork() {
+  const net = structures.filter(s => NETWORK_TYPES[s.type]);
+  net.forEach(s => s.active = false);
+  if (!core) return;
+  core.active = true;
+  const q = [core];
+  while (q.length) {
+    const a = q.pop();
+    const ra = CONFIG.linkRange[a.type];
+    for (const b of net) {
+      if (b.active) continue;
+      const reach = Math.max(ra, CONFIG.linkRange[b.type]);
+      if (dist(a, b) <= reach) { b.active = true; q.push(b); }
+    }
+  }
+}
+
+/* =====================================================================================
+   FLUID SIMULATION  (one cellular step)
+   Surface height of a cell = elev*levelHeight + depth. Fluid flows from higher surface to
+   lower-surface orthogonal neighbours (Jacobi update via the delta buffer => order-free).
+   ===================================================================================== */
+function fluidStep(dt) {
+  // Emitter is a permanent pressure source.
+  depth[idx(CONFIG.emitter.c, CONFIG.emitter.r)] += CONFIG.emitterRate * dt;
+
+  delta.fill(0);
+  const H = CONFIG.levelHeight, fr = CONFIG.flowRate;
+  for (let r = 0; r < R; r++) {
+    for (let c = 0; c < C; c++) {
+      const i = idx(c, r);
+      if (isWall[i]) continue;
+      const d = depth[i];
+      if (d <= 0) continue;
+      const sc = elev[i] * H + d;
+      // gather lower neighbours
+      let tot = 0;
+      // up
+      let n, sn, a;
+      const cand = [];
+      if (r > 0)     { n = i - C; if (!isWall[n]) { sn = elev[n]*H + depth[n]; if (sc > sn) { a=(sc-sn)*fr; cand.push(n,a); tot+=a; } } }
+      if (r < R-1)   { n = i + C; if (!isWall[n]) { sn = elev[n]*H + depth[n]; if (sc > sn) { a=(sc-sn)*fr; cand.push(n,a); tot+=a; } } }
+      if (c > 0)     { n = i - 1; if (!isWall[n]) { sn = elev[n]*H + depth[n]; if (sc > sn) { a=(sc-sn)*fr; cand.push(n,a); tot+=a; } } }
+      if (c < C-1)   { n = i + 1; if (!isWall[n]) { sn = elev[n]*H + depth[n]; if (sc > sn) { a=(sc-sn)*fr; cand.push(n,a); tot+=a; } } }
+      if (tot <= 0) continue;
+      const scale = tot > d ? d / tot : 1; // never move more fluid than we have
+      for (let k = 0; k < cand.length; k += 2) {
+        const m = cand[k+1] * scale;
+        delta[i] -= m; delta[cand[k]] += m;
+      }
+    }
+  }
+  for (let i = 0; i < N; i++) {
+    if (isWall[i]) { depth[i] = 0; continue; }
+    let d = depth[i] + delta[i];
+    if (d < CONFIG.minDepth) d = 0;
+    depth[i] = d;
+  }
+}
+
+/* =====================================================================================
+   ECONOMY + STRUCTURE LOGIC  (one game step of dt seconds)
+   ===================================================================================== */
+function simStep(dt) {
+  recomputeNetwork();
+
+  // --- Income from Extractors (yield scales with fluid depth) + Core passive ---
+  let income = CONFIG.coreIncome;
+  const destroyed = [];
+  for (const s of structures) {
+    if (s.type === 'extractor') {
+      const d = depth[idx(s.c, s.r)];
+      s.flooding = d >= CONFIG.riskDepth;
+      if (d >= CONFIG.destroyDepth) { destroyed.push(s); continue; }
+      if (s.active && d > 0) {
+        income += Math.min(CONFIG.extractorYield * d, CONFIG.extractorYieldCap);
+      }
+    }
+  }
+  game.energy += income * dt;
+
+  // --- Remove flooded-out Extractors ---
+  for (const s of destroyed) {
+    occ[idx(s.c, s.r)] = null;
+    structures = structures.filter(x => x !== s);
+  }
+  if (destroyed.length) recomputeNetwork();
+
+  // --- Blasters: auto-fire at deepest (tiebreak nearest) fluid in range ---
+  let cons = 0;
+  const range = CONFIG.blasterRange, fireGap = 1 / CONFIG.blasterFireRate;
+  for (const s of structures) {
+    if (s.type !== 'blaster') continue;
+    s.cooldown -= dt;
+    if (!s.active) { s.target = null; continue; }
+    // pick a target each step (for display + firing)
+    let best = null, bestD = CONFIG.blasterMinTarget, bestDist = Infinity;
+    const c0 = s.c, r0 = s.r, rad = Math.ceil(range);
+    for (let r = Math.max(0, r0-rad); r <= Math.min(R-1, r0+rad); r++) {
+      for (let c = Math.max(0, c0-rad); c <= Math.min(C-1, c0+rad); c++) {
+        const dd = depth[idx(c, r)];
+        if (dd < CONFIG.blasterMinTarget) continue;
+        const ds = Math.hypot(c-c0, r-r0);
+        if (ds > range) continue;
+        if (dd > bestD + 1e-6 || (Math.abs(dd-bestD) <= 1e-6 && ds < bestDist)) {
+          best = { c, r }; bestD = dd; bestDist = ds;
+        }
+      }
+    }
+    s.target = best;
+    if (best && s.cooldown <= 0 && game.energy >= CONFIG.blasterShotCost) {
+      const ti = idx(best.c, best.r);
+      depth[ti] = Math.max(0, depth[ti] - CONFIG.blasterShotPower);
+      game.energy -= CONFIG.blasterShotCost;
+      s.cooldown = fireGap;
+      cons += CONFIG.blasterShotCost * CONFIG.blasterFireRate; // approx rate for HUD
+      // visual shot
+      game.shots.push({ x1:(s.c+.5)*CONFIG.cellPx, y1:(s.r+.5)*CONFIG.cellPx,
+                        x2:(best.c+.5)*CONFIG.cellPx, y2:(best.r+.5)*CONFIG.cellPx, life:0.12 });
+    }
+  }
+
+  // --- Beacon charging: needs a steady draw; pauses if it can't be met ---
+  if (beacon) {
+    const need = CONFIG.beaconDraw * dt;
+    if (beacon.active && game.energy >= need && beacon.charge < 100) {
+      game.energy -= need;
+      beacon.charge = Math.min(100, beacon.charge + CONFIG.beaconChargeRate * dt);
+      beacon.charging = true;
+      cons += CONFIG.beaconDraw;
+    } else {
+      beacon.charging = false;
+    }
+  }
+
+  game.energy = Math.max(0, game.energy);
+  game.energyPeak = Math.max(game.energyPeak, game.energy);
+  game.income = income;
+  game.cons = cons;
+  game.time += dt;
+
+  // --- Decay shot effects ---
+  for (const sh of game.shots) sh.life -= dt;
+  game.shots = game.shots.filter(sh => sh.life > 0);
+
+  // --- Win / lose ---
+  if (beacon && beacon.charge >= 100) endGame('win');
+  if (depth[idx(core.c, core.r)] >= CONFIG.coreSubmergeDepth) endGame('lose');
+}
+
+function endGame(result) {
+  if (game.over) return;
+  game.over = result;
+  game.paused = true;
+  const mm = Math.floor(game.time / 60), ss = Math.floor(game.time % 60);
+  const tstr = mm + 'm ' + (ss < 10 ? '0' : '') + ss + 's';
+  if (result === 'win') {
+    document.getElementById('winStats').textContent = 'Time: ' + tstr + '  •  Structures standing: ' + structures.length;
+    document.getElementById('win').classList.remove('hidden');
+  } else {
+    document.getElementById('loseStats').textContent = 'Survived: ' + tstr + '  •  Beacon charge reached: ' + (beacon ? Math.floor(beacon.charge) : 0) + '%';
+    document.getElementById('lose').classList.remove('hidden');
+  }
+}
+
+/* =====================================================================================
+   RENDERING
+   ===================================================================================== */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const PX = CONFIG.cellPx;
+const BW = C * PX, BH = R * PX;
+
+function setupCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = BW * dpr; cv.height = BH * dpr;
+  cv.style.width = BW + 'px'; cv.style.height = BH + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function fluidStyle(d) {
+  const t = clamp(d / CONFIG.fluidVisMax, 0, 1);
+  const hue = 150 + (288 - 150) * t;             // toxic green -> lethal purple
+  const light = 44 + 14 * t;
+  const alpha = 0.16 + 0.66 * Math.pow(t, 0.78);
+  return 'hsla(' + hue.toFixed(0) + ',88%,' + light.toFixed(0) + '%,' + alpha.toFixed(3) + ')';
+}
+
+function render() {
+  ctx.clearRect(0, 0, BW, BH);
+
+  // --- Terrain with cliff relief ---
+  for (let r = 0; r < R; r++) {
+    for (let c = 0; c < C; c++) {
+      const i = idx(c, r), e = elev[i], x = c*PX, y = r*PX;
+      ctx.fillStyle = CONFIG.levelColors[e];
+      ctx.fillRect(x, y, PX, PX);
+      // subtle cliff shading: darker edge where this cell is higher than its right/bottom neighbour,
+      // lighter edge where it is higher than left/top (reads as a drop-off)
+      ctx.lineWidth = 2;
+      if (c < C-1 && elev[i+1] < e) { ctx.strokeStyle='rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.moveTo(x+PX-1,y); ctx.lineTo(x+PX-1,y+PX); ctx.stroke(); }
+      if (r < R-1 && elev[i+C] < e) { ctx.strokeStyle='rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.moveTo(x,y+PX-1); ctx.lineTo(x+PX,y+PX-1); ctx.stroke(); }
+      if (c > 0   && elev[i-1] < e) { ctx.strokeStyle='rgba(255,255,255,0.05)'; ctx.beginPath(); ctx.moveTo(x+1,y); ctx.lineTo(x+1,y+PX); ctx.stroke(); }
+      if (r > 0   && elev[i-C] < e) { ctx.strokeStyle='rgba(255,255,255,0.05)'; ctx.beginPath(); ctx.moveTo(x,y+1); ctx.lineTo(x+PX,y+1); ctx.stroke(); }
+    }
+  }
+
+  // --- Fluid overlay (opacity/hue track depth) ---
+  for (let r = 0; r < R; r++) {
+    for (let c = 0; c < C; c++) {
+      const d = depth[idx(c, r)];
+      if (d < CONFIG.fluidRenderMin) continue;
+      const x = c*PX, y = r*PX;
+      ctx.fillStyle = fluidStyle(d);
+      ctx.fillRect(x, y, PX, PX);
+      const t = clamp(d / CONFIG.fluidVisMax, 0, 1);
+      if (t > 0.62) { // lethal-depth inner glow
+        ctx.fillStyle = 'hsla(290,95%,72%,' + (0.16*(t-0.62)/0.38).toFixed(3) + ')';
+        ctx.fillRect(x+3, y+3, PX-6, PX-6);
+      }
+    }
+  }
+
+  // --- Faint grid ---
+  ctx.strokeStyle = 'rgba(255,255,255,0.025)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let c = 0; c <= C; c++){ ctx.moveTo(c*PX+.5,0); ctx.lineTo(c*PX+.5,BH); }
+  for (let r = 0; r <= R; r++){ ctx.moveTo(0,r*PX+.5); ctx.lineTo(BW,r*PX+.5); }
+  ctx.stroke();
+
+  // --- Network connection lines (between active linked structures) ---
+  const net = structures.filter(s => NETWORK_TYPES[s.type] && s.active);
+  ctx.lineWidth = 1.5;
+  for (let a = 0; a < net.length; a++) {
+    for (let b = a+1; b < net.length; b++) {
+      const A = net[a], B = net[b];
+      const reach = Math.max(CONFIG.linkRange[A.type], CONFIG.linkRange[B.type]);
+      if (dist(A, B) <= reach) {
+        ctx.strokeStyle = 'rgba(63,224,208,0.32)';
+        ctx.beginPath();
+        ctx.moveTo((A.c+.5)*PX,(A.r+.5)*PX); ctx.lineTo((B.c+.5)*PX,(B.r+.5)*PX); ctx.stroke();
+      }
+    }
+  }
+
+  // --- Emitter (pulsing source) ---
+  drawEmitter();
+
+  // --- Blaster shots ---
+  for (const sh of game.shots) {
+    ctx.strokeStyle = 'rgba(255,120,90,' + clamp(sh.life/0.12,0,1).toFixed(2) + ')';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(sh.x1, sh.y1); ctx.lineTo(sh.x2, sh.y2); ctx.stroke();
+  }
+
+  // --- Structures ---
+  for (const s of structures) drawStructure(s);
+
+  // --- Hover / build preview ---
+  drawHover();
+}
+
+const pulse = () => 0.5 + 0.5 * Math.sin(performance.now() / 320);
+
+function drawEmitter() {
+  const x = (CONFIG.emitter.c+.5)*PX, y = (CONFIG.emitter.r+.5)*PX, p = pulse();
+  ctx.save();
+  for (let k = 3; k >= 1; k--) {
+    ctx.strokeStyle = 'rgba(176,107,255,' + (0.12 + 0.10*p).toFixed(2) + ')';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, PX*(0.5+k*0.45)+p*4, 0, Math.PI*2); ctx.stroke();
+  }
+  ctx.fillStyle = '#b06bff';
+  ctx.beginPath(); ctx.arc(x, y, PX*0.42, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.beginPath(); ctx.arc(x, y, PX*0.18, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function roundRect(x,y,w,h,rad){ ctx.beginPath(); ctx.moveTo(x+rad,y);
+  ctx.arcTo(x+w,y,x+w,y+h,rad); ctx.arcTo(x+w,y+h,x,y+h,rad);
+  ctx.arcTo(x,y+h,x,y,rad); ctx.arcTo(x,y,x+w,y,rad); ctx.closePath(); }
+
+function drawStructure(s) {
+  const x = s.c*PX, y = s.r*PX, cx = x+PX/2, cy = y+PX/2;
+  const inactive = NETWORK_TYPES[s.type] && !s.active && s.type !== 'core';
+  ctx.save();
+  if (inactive) ctx.globalAlpha = 0.45;
+
+  if (s.type === 'core') {
+    ctx.fillStyle = '#1c3a5e'; roundRect(x+2,y+2,PX-4,PX-4,4); ctx.fill();
+    ctx.strokeStyle = '#4aa3ff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = '#9ecbff'; ctx.beginPath(); ctx.arc(cx,cy,PX*0.18,0,Math.PI*2); ctx.fill();
+  }
+  else if (s.type === 'extractor') {
+    ctx.fillStyle = '#5a3c12'; roundRect(x+3,y+3,PX-6,PX-6,3); ctx.fill();
+    ctx.strokeStyle = '#ffb24a'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = '#ffb24a'; ctx.beginPath(); ctx.arc(cx,cy,PX*0.16,0,Math.PI*2); ctx.fill();
+  }
+  else if (s.type === 'relay') {
+    ctx.fillStyle = '#0e4b46'; ctx.strokeStyle = '#3fe0d0'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx,cy-PX*0.32); ctx.lineTo(cx+PX*0.32,cy); ctx.lineTo(cx,cy+PX*0.32); ctx.lineTo(cx-PX*0.32,cy); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#aef6ee'; ctx.beginPath(); ctx.arc(cx,cy,PX*0.08,0,Math.PI*2); ctx.fill();
+  }
+  else if (s.type === 'blaster') {
+    ctx.fillStyle = '#5e201b'; ctx.strokeStyle = '#ff6b5e'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx,cy-PX*0.34); ctx.lineTo(cx+PX*0.32,cy+PX*0.28); ctx.lineTo(cx-PX*0.32,cy+PX*0.28); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    if (s.active && s.target) { // barrel toward target
+      ctx.strokeStyle = '#ff9a8e'; ctx.lineWidth = 2.5;
+      const tx=(s.target.c+.5)*PX, ty=(s.target.r+.5)*PX, ang=Math.atan2(ty-cy,tx-cx);
+      ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+Math.cos(ang)*PX*0.42, cy+Math.sin(ang)*PX*0.42); ctx.stroke();
+    }
+  }
+  else if (s.type === 'barrier') {
+    ctx.fillStyle = '#6b7280'; roundRect(x+1.5,y+1.5,PX-3,PX-3,3); ctx.fill();
+    ctx.strokeStyle = '#aab3c2'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.28)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x+3,cy); ctx.lineTo(x+PX-3,cy);
+    ctx.moveTo(cx,y+3); ctx.lineTo(cx,cy); ctx.stroke();
+  }
+  else if (s.type === 'beacon') {
+    // charge ring
+    ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(cx,cy,PX*0.46,0,Math.PI*2); ctx.stroke();
+    ctx.strokeStyle = '#ffe27a'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(cx,cy,PX*0.46,-Math.PI/2,-Math.PI/2 + Math.PI*2*(s.charge/100)); ctx.stroke();
+    const gp = beacon && beacon.charging ? pulse() : 0.3;
+    ctx.fillStyle = 'rgba(255,226,122,' + (0.55+0.45*gp).toFixed(2) + ')';
+    ctx.beginPath();
+    ctx.moveTo(cx,cy-PX*0.3); ctx.lineTo(cx+PX*0.26,cy); ctx.lineTo(cx,cy+PX*0.3); ctx.lineTo(cx-PX*0.26,cy); ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.restore();
+
+  // at-risk Extractor warning (drawn full opacity, on top)
+  if (s.type === 'extractor' && s.flooding) {
+    const p = pulse();
+    ctx.strokeStyle = 'rgba(255,70,70,' + (0.5+0.5*p).toFixed(2) + ')';
+    ctx.lineWidth = 2.5; roundRect(x+1,y+1,PX-2,PX-2,4); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,80,80,' + (0.7+0.3*p).toFixed(2) + ')';
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('!', cx, cy-PX*0.02);
+  }
+  // inactive marker
+  if (inactive) {
+    ctx.strokeStyle = 'rgba(255,90,90,0.7)'; ctx.lineWidth = 1.5;
+    ctx.setLineDash([3,3]); roundRect(x+1,y+1,PX-2,PX-2,4); ctx.stroke(); ctx.setLineDash([]);
+  }
+}
+
+function drawHover() {
+  const { c, r } = game.hover;
+  if (c < 0 || game.over) return;
+  const x = c*PX, y = r*PX;
+  if (game.tool === 'delete') {
+    const s = occ[idx(c,r)];
+    ctx.strokeStyle = s && s.type!=='core' ? 'rgba(255,90,90,0.9)' : 'rgba(255,90,90,0.3)';
+    ctx.lineWidth = 2; roundRect(x+1,y+1,PX-2,PX-2,4); ctx.stroke();
+    return;
+  }
+  const v = placeValidity(game.tool, c, r);
+  ctx.strokeStyle = v.ok ? 'rgba(93,212,123,0.95)' : 'rgba(255,90,90,0.9)';
+  ctx.lineWidth = 2; roundRect(x+1,y+1,PX-2,PX-2,4); ctx.stroke();
+
+  // link-range preview + would-connect indicator for network builds
+  if (NETWORK_TYPES[game.tool]) {
+    const rng = CONFIG.linkRange[game.tool];
+    ctx.strokeStyle = 'rgba(63,224,208,0.25)'; ctx.setLineDash([4,4]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(x+PX/2, y+PX/2, rng*PX, 0, Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+    // nearest active structure we'd link to
+    let best=null, bd=Infinity;
+    for (const s of structures) {
+      if (!NETWORK_TYPES[s.type] || !s.active) continue;
+      const reach = Math.max(rng, CONFIG.linkRange[s.type]);
+      const dd = Math.hypot(s.c-c, s.r-r);
+      if (dd <= reach && dd < bd) { bd = dd; best = s; }
+    }
+    if (best) {
+      ctx.strokeStyle = 'rgba(93,212,123,0.6)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x+PX/2,y+PX/2); ctx.lineTo((best.c+.5)*PX,(best.r+.5)*PX); ctx.stroke();
+    }
+  }
+}
+
+/* =====================================================================================
+   HUD
+   ===================================================================================== */
+const $ = id => document.getElementById(id);
+function updateHud() {
+  $('energyVal').textContent = Math.floor(game.energy);
+  const cap = Math.max(500, Math.ceil(game.energyPeak/100)*100);
+  $('energyCap').textContent = cap;
+  $('energyFill').style.width = clamp(game.energy/cap*100,0,100) + '%';
+  $('incomeVal').textContent = game.income.toFixed(1);
+  $('consVal').textContent = game.cons.toFixed(1);
+  const net = game.income - game.cons;
+  const ns = $('netStat');
+  ns.textContent = (net>=0?'+':'') + net.toFixed(1) + '/s';
+  ns.className = 'val net ' + (net>=0?'pos':'neg');
+  updateBeaconHud();
+}
+function updateBeaconHud() {
+  const el = $('beaconStat');
+  if (beacon) {
+    el.style.display = 'flex';
+    $('beaconVal').textContent = Math.floor(beacon.charge);
+    $('beaconFill').style.width = beacon.charge + '%';
+  } else el.style.display = 'none';
+}
+
+/* =====================================================================================
+   TOOLBAR / CONTROLS
+   ===================================================================================== */
+function buildToolbar() {
+  const tb = $('toolbar');
+  tb.innerHTML = '';
+  for (const t of TOOLS) {
+    const el = document.createElement('div');
+    el.className = 'tool' + (game.tool===t.type?' sel':'');
+    el.dataset.type = t.type;
+    el.innerHTML =
+      '<div class="tname"><span class="swatch" style="background:'+t.color+'"></span>'+t.name+'</div>'+
+      '<div class="tcost">⚡ '+CONFIG.cost[t.type]+'</div>'+
+      '<div class="tdesc">'+t.desc+'</div>';
+    el.onclick = () => selectTool(t.type);
+    tb.appendChild(el);
+  }
+  const del = document.createElement('div');
+  del.className = 'tool del' + (game.tool==='delete'?' sel':'');
+  del.dataset.type = 'delete';
+  del.innerHTML = '<div class="tname"><span class="swatch"></span>Sell / Delete</div>'+
+                  '<div class="tcost" style="color:var(--green)">+'+(CONFIG.refundFrac*100)+'% refund</div>'+
+                  '<div class="tdesc">Click a structure to remove it.</div>';
+  del.onclick = () => selectTool('delete');
+  tb.appendChild(del);
+  refreshToolAffordability();
+}
+function selectTool(type) {
+  game.tool = type;
+  document.querySelectorAll('.tool').forEach(el => el.classList.toggle('sel', el.dataset.type===type));
+}
+function refreshToolAffordability() {
+  document.querySelectorAll('.tool').forEach(el => {
+    const t = el.dataset.type;
+    if (t==='delete') return;
+    el.classList.toggle('cant', game.energy < CONFIG.cost[t]);
+  });
+}
+
+/* =====================================================================================
+   INPUT
+   ===================================================================================== */
+function cellFromEvent(e) {
+  const rect = cv.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (BW / rect.width);
+  const y = (e.clientY - rect.top) * (BH / rect.height);
+  return { c: Math.floor(x/PX), r: Math.floor(y/PX) };
+}
+cv.addEventListener('mousemove', e => { game.hover = cellFromEvent(e); });
+cv.addEventListener('mouseleave', () => { game.hover = { c:-1, r:-1 }; });
+cv.addEventListener('click', e => {
+  if (game.over) return;
+  const { c, r } = cellFromEvent(e);
+  if (!inb(c,r)) return;
+  if (game.tool === 'delete') { removeAt(c,r); }
+  else {
+    const v = placeValidity(game.tool, c, r);
+    if (v.ok) { placeStructure(game.tool, c, r); }
+    else { flashHint(v.reason); }
+  }
+});
+cv.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  if (game.over) return;
+  const { c, r } = cellFromEvent(e);
+  removeAt(c,r);
+});
+
+let hintTimer = null;
+const defaultHint = 'Select a tool, then click a cell to build. Right-click a structure to remove it (partial refund).';
+function flashHint(msg) {
+  const h = $('hint'); h.textContent = '⚠ ' + msg; h.style.color = 'var(--red)';
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { h.textContent = defaultHint; h.style.color = ''; }, 1800);
+}
+
+$('btnPause').onclick = () => {
+  if (game.over) return;
+  game.paused = !game.paused;
+  $('btnPause').textContent = game.paused ? '▶ Resume' : '⏸ Pause';
+  $('btnPause').classList.toggle('active', game.paused);
+};
+$('btnSpeed').onclick = () => {
+  game.speedIdx = (game.speedIdx + 1) % CONFIG.speeds.length;
+  $('btnSpeed').textContent = '▶ ' + CONFIG.speeds[game.speedIdx] + 'x';
+};
+$('btnStart').onclick = () => { $('howto').classList.add('hidden'); };
+$('btnRestartWin').onclick = restart;
+$('btnRestartLose').onclick = restart;
+
+/* =====================================================================================
+   GAME INIT / RESTART
+   ===================================================================================== */
+function init() {
+  elev = new Uint8Array(N); depth = new Float32Array(N); delta = new Float32Array(N);
+  isWall = new Uint8Array(N); occ = new Array(N).fill(null);
+  structures = []; beacon = null;
+  buildTerrain();
+  for (let i = 0; i < N; i++) if (elev[i] === 0) depth[i] = CONFIG.basinPrefill; // pre-flood the basin
+  core = { type:'core', c:CONFIG.core.c, r:CONFIG.core.r, active:true };
+  occ[idx(core.c, core.r)] = core;
+  structures.push(core);
+  game = {
+    energy: CONFIG.startEnergy, energyPeak: CONFIG.startEnergy,
+    income:0, cons:0, tool:'extractor', paused:false, speedIdx:0,
+    over:null, time:0, hover:{c:-1,r:-1}, shots:[],
+  };
+  recomputeNetwork();
+  buildToolbar();
+  updateBeaconHud();
+  $('btnPause').textContent = '⏸ Pause'; $('btnPause').classList.remove('active');
+  $('btnSpeed').textContent = '▶ 1x';
+  $('win').classList.add('hidden'); $('lose').classList.add('hidden');
+}
+function restart() { init(); }
+
+/* =====================================================================================
+   MAIN LOOP
+   ===================================================================================== */
+let lastT = performance.now(), acc = 0;
+function frame(now) {
+  let dtw = now - lastT; lastT = now;
+  if (dtw > 250) dtw = 250; // avoid huge catch-up after tab blur
+  if (!game.paused && !game.over) {
+    acc += dtw * CONFIG.speeds[game.speedIdx];
+    let steps = 0;
+    while (acc >= CONFIG.fluidTickMs && steps < CONFIG.maxStepsPerFrame) {
+      const dt = CONFIG.fluidTickMs / 1000;
+      fluidStep(dt);
+      simStep(dt);
+      acc -= CONFIG.fluidTickMs;
+      steps++;
+    }
+    if (acc > CONFIG.fluidTickMs * 2) acc = 0; // shed backlog
+  }
+  render();
+  updateHud();
+  refreshToolAffordability();
+  requestAnimationFrame(frame);
+}
+
+/* ---- Test/automation hook (harmless; used for the visual self-test loop) ---- */
+window.HTH = {
+  get state(){ return game; }, CONFIG, depth:()=>depth, elev:()=>elev,
+  place:(type,c,r)=>placeStructure(type,c,r),
+  removeAt:(c,r)=>removeAt(c,r),
+  step:(n=1)=>{ const dt=CONFIG.fluidTickMs/1000; for(let i=0;i<n;i++){ fluidStep(dt); simStep(dt); } },
+  setEnergy:v=>{ game.energy=v; },
+  setSpeed:i=>{ game.speedIdx=i; },
+  beaconCharge:()=> beacon ? beacon.charge : null,
+  setBeaconCharge:v=>{ if(beacon) beacon.charge=v; },
+  emitterFill:(n)=>{ const dt=CONFIG.fluidTickMs/1000; for(let i=0;i<n;i++) fluidStep(dt); },
+};
+
+setupCanvas();
+init();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
