@@ -53,9 +53,14 @@ accumulating damage is obvious well before destruction.
 - **Blaster** — when connected, auto-fires at the deepest (tiebreak nearest) fluid in range, lowering
   its depth and consuming energy per shot; stops firing if stored energy is depleted. Middle toughness,
   and can self-protect by suppressing nearby depth.
-- **Barrier/Levee** — cheap; blocks fluid flow at its cell (acts like an infinite wall; its own cell
-  stays dry, so it takes no damage). Used to dam basins into deep reservoirs and protect corridors.
-  Permanent until removed.
+- **Miner** *(v0.4)* — harvests **metal** (the second resource) when built **on or adjacent to a metal
+  deposit** and connected to the network; the live metal yield floats as a steel number on the map.
+  Flood-damageable like an Extractor (HP + health bar), and obeys the build-time system. Costs energy.
+- **Barrier/Levee** — blocks fluid flow at its cell (an infinite wall; its own cell is forced dry).
+  Used to dam basins into deep reservoirs and protect corridors. *(v0.4)* It now **costs metal**, has
+  **HP + a health bar**, and is **eroded by the pressure it dams** — the bigger the surface-height
+  differential across it, the faster it wears down; at **0 HP it bursts** (removed; fluid floods
+  through). Repair it (maintenance pump, costs metal) to hold it. See *Metal economy & barrier erosion*.
 - **Beacon** — the win objective. Built in the basin (lowest elevation). **Immune to fluid** (no HP
   bar). Draws a steady amount of energy to charge; charges only while that draw is met, pauses
   otherwise. **100% charge = WIN.** You must defend its supply line and keep it powered.
@@ -91,6 +96,28 @@ anti-rush mechanic.
   while building, grey `wait` while still waiting for the network to arrive.
 - **Cost/refund:** the build cost is charged when the blueprint is placed; selling/cancelling a
   blueprint (even mid-build) returns the normal partial refund.
+
+## Metal economy & barrier erosion (v0.4)
+A second resource, **metal**, turns walling from a cheap one-time spam-win into a defended, ongoing
+investment.
+- **Deposits.** A small number of renewable **metal deposits** (steel-hexagon markers) overlaid on the
+  *existing* map — they mark existing cells and do **not** change terrain elevations or layout. Placed
+  in the contested mid-ground so you must extend the network to them and keep that line alive.
+- **Miner.** Built on or adjacent (8-neighbourhood) to a deposit and connected, a Miner pulls
+  `metalYield`/s into the global metal pool. It's flood-damageable like an Extractor and obeys the
+  build-time system. Miners cost **energy** — the bootstrap loop is energy → Miners → metal → walls.
+- **Barriers cost metal**, both to build (`cost.barrier`, in metal) and to repair (`barrier.repairCostPerHp`,
+  in metal). Build/affordability/refund all route to the metal pool for barriers (see `costType()`).
+- **Erosion.** Each tick a built barrier loses HP at `barrier.erosionRate × (differential − erodeStart)`,
+  where the **differential** is the spread between the highest and lowest non-wall neighbour *surface
+  heights* (`elev·levelHeight + depth`). Deep reservoir on one side + lower/dry on the other ⇒ large
+  differential ⇒ fast erosion; equal depth both sides ⇒ ~0. At 0 HP the barrier **bursts** (removed,
+  `isWall` cleared, fluid flows through next tick).
+- **Repair = maintenance pump.** A barrier's repair pump **stays armed** (until toggled off) and
+  continuously tops the wall up against erosion, spending metal; it can be pre-armed at full HP. Holding
+  a deep dam therefore costs a steady metal/s — wall *strategically* and keep Miners alive to fund it.
+- **HUD:** a metal counter + net metal/s mirrors the energy stat; the at-risk "!" flash is driven by
+  **net** HP loss, so a fully-maintained eroding wall doesn't false-alarm.
 
 ## Network & energy
 - Global stored-energy pool + per-second income from Extractors (scaled by depth) and the Core,
@@ -202,6 +229,34 @@ Focus of the version: kill the ~10-second rush-win and make it a deliberate, mul
   v0.4's scarce **metal** upkeep (barrier erosion costs metal to repair) adds a parallel cost that
   doesn't snowball the same way. Repair-cost rebalancing remains a future target.
 
+## Implementation notes & decisions (v0.4)
+Focus of the version: stop the "spam cheap Barriers to wall the fluid off" cheese, via two combined
+mechanics — barrier erosion and a scarce second resource (metal).
+
+- **`HAS_HEALTH` vs `DAMAGEABLE`.** Barriers now have HP/health-bars/repair (`HAS_HEALTH`) but are
+  **not** in `DAMAGEABLE` (the own-cell-depth damage set) — their cell is forced dry, so they'd never
+  take depth damage. Erosion is a separate pass driven by `barrierDifferential()`. `maxHpOf()` and
+  `costType()` keep the barrier's different HP source and metal cost out of the type-keyed tables.
+- **Differential = neighbour surface spread.** Using `max−min` of non-wall neighbour surfaces (not the
+  wall's own floor) gives exactly the spec's "surface-height differential across the barrier": a deep
+  reservoir vs a dry/low side erodes fast; equal water both sides nets ~0 (a submerged levee with no
+  net pressure doesn't pointlessly erode).
+- **Maintenance pump.** Barrier repair intentionally does **not** auto-stop at full HP (flood-structure
+  repair still does). A deep dam erodes continuously, so a one-shot heal would be useless; the pump
+  stays armed and pays metal/s to hold the wall. This is the knob that makes walling an *ongoing* cost.
+- **Net-loss flash.** The at-risk "!" now keys off net HP change this step (`s.losing`), not gross
+  erosion, so a maintained wall (eroding but fully repaired) reads as safe while an unfunded one flashes.
+- **Miners cost energy, barriers cost metal.** This makes a deliberate bootstrap chain (energy →
+  Miners → metal → walls) and keeps the two economies coupled but distinct. Miner placement is gated to
+  on/adjacent-to-a-deposit so you can't make a useless one by accident.
+- **Deposits are an overlay**, never a terrain edit (a separate `deposit` typed array; elevations
+  untouched per the hard constraint). Three of them, in the contested middle, so reaching/holding them
+  is a real decision.
+- **Balance intent.** Numbers are tuned so a small dam against a modest pool is cheap to hold (≈1–2
+  metal/s) while walling the whole deep basin is self-defeating (tens of metal/s ⇒ many Miners). The
+  energy economy is unchanged from v0.3, so v0.3's pacing/winnability carries over; metal is an added
+  layer for the damming game. Erosion-vs-repair and deposit placement are the most likely future tweaks.
+
 ## Tuning quick-reference (current `CONFIG`)
 | Knob | Value | Notes |
 |------|-------|-------|
@@ -215,11 +270,14 @@ Focus of the version: kill the ~10-second rush-win and make it a deliberate, mul
 | damage HP | extractor 120 / blaster 80 / relay 55 | max HP per type (toughness order) |
 | damage startDepth | extractor 5.0 / blaster 3.0 / relay 2.4 | depth where HP loss begins |
 | damage rate | extractor 3.2 / blaster 4.5 / relay 6.0 | HP/s lost per unit depth past start; lethalDepth 8.0 (readout label) |
-| repair | 28 HP/s, 0.7 energy/HP | repair-pump heal rate + cost |
+| repair | 28 HP/s, 0.7 energy/HP | repair-pump heal rate + cost (flood structures) |
+| metal | start 30 · yield 3/s/miner · 3 deposits | v0.4 second resource (deposits at 22,8 / 22,24 / 33,16) |
+| barrier | hp 70 · erodeStart 1.0 · erosionRate 2.2 · repair 18 HP/s @ 0.4 metal/HP | v0.4: HP + pressure erosion + metal upkeep |
+| miner | hp 100 · startDepth 4.5 · rate 3.5 | v0.4 metal harvester (flood-damageable like Extractor) |
 | coreSubmergeDepth | 0.8 | lose threshold on the Core cell (unchanged) |
 | blaster | range 5, 0.85 depth/shot, 4/s, 1.1 e/shot | |
 | beacon | draw 9/s, charge 3.5%/s | ≈ 29s of uptime to win |
-| costs | extractor 55 / relay 25 / blaster 80 / barrier 10 / beacon 300 | refund 50% |
+| costs | extractor 55 / relay 25 / blaster 80 / beacon 300 / miner 50 (energy) · barrier 15 (METAL) | refund 50% in-kind |
 | startEnergy | 200 | v0.3: ↓ from 260 (deliberate opening) |
 | coreIncome | 1.0 /s | v0.3: ↓ from 1.5 |
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Harvest the Hazard — v0.3</title>
+<title>Harvest the Hazard — v0.4</title>
 <style>
   :root{
     --bg:#0a0d13;
@@ -106,6 +106,10 @@
     <div class="stat"><span class="label">Income</span><span class="val pos">+<span id="incomeVal">0</span><span style="font-size:11px">/s</span></span></div>
     <div class="stat"><span class="label">Consumption</span><span class="val neg">-<span id="consVal">0</span><span style="font-size:11px">/s</span></span></div>
     <div class="stat"><span class="label">Net</span><span class="val net" id="netStat">+0/s</span></div>
+    <div class="stat" id="metalStat" style="min-width:104px">
+      <span class="label" style="color:#aab3c2">⬢ Metal</span>
+      <span class="val"><span id="metalVal">0</span> <span class="net" id="metalNet" style="font-size:11px">+0/s</span></span>
+    </div>
     <div class="stat" id="beaconStat">
       <span class="label">Beacon Charge</span>
       <span class="val"><span id="beaconVal">0</span>%</span>
@@ -138,8 +142,9 @@
       <li><b style="color:var(--amber)">Extractors</b> turn fluid into energy. <span class="key">Deeper fluid = more energy</span> — but deep fluid <span class="danger">damages structures over time</span> (watch the <b>health bars</b>). Extractors are the toughest.</li>
       <li><b style="color:var(--cyan)">Relays</b> extend your network to distant ground — but they're fragile, so keep them dry. Everything must stay <b>connected</b> to the Core.</li>
       <li><b style="color:var(--red)">Blasters</b> burn energy to push fluid back and protect your line.</li>
-      <li><b style="color:#9aa3b2">Barriers</b> are cheap walls — <b>dam a basin</b> to grow a deep, lucrative reservoir.</li>
-      <li><b style="color:var(--green)">Repair</b> spends energy to heal a damaged structure — toggle a repair pump from the toolbar so flood damage isn't permanent.</li>
+      <li><b style="color:#c2cad6">⬢ Metal</b> is a second resource. <b style="color:#c2cad6">Miners</b> pull it from <b>deposits</b> (the steel hexagons) — reach and defend them.</li>
+      <li><b style="color:#9aa3b2">Barriers</b> are walls that <b>cost metal</b> and <b>dam a basin</b> into a deep reservoir — but the pressure they hold back <span class="danger">erodes them</span>, and they <span class="danger">burst</span> at 0 HP. Keep them repaired.</li>
+      <li><b style="color:var(--green)">Repair</b> heals a damaged structure — toggle a repair pump from the toolbar. It spends <b>energy</b> (or <b style="color:#c2cad6">metal</b> for barriers) so damage isn't permanent.</li>
       <li><b class="obj">Beacon</b> — build it in the deadly basin and keep it powered. It's <b>immune</b> to the fluid. <span class="obj">Charge it to 100% to WIN.</span></li>
     </ul>
     <p><b>Everything takes time to build.</b> A placed structure is a <b style="color:var(--cyan)">blueprint</b> that only starts constructing once the network reaches it through a finished structure — so a relay line builds <b>one segment at a time</b>. Plan ahead.</p>
@@ -172,7 +177,7 @@
 <script>
 "use strict";
 /* =====================================================================================
-   HARVEST THE HAZARD  —  v0.3
+   HARVEST THE HAZARD  —  v0.4
    Single-file vanilla JS + Canvas. No dependencies. Open index.html directly.
    ALL tunable gameplay numbers live in CONFIG below.
    ===================================================================================== */
@@ -201,6 +206,27 @@ const CONFIG = {
   extractorYield: 1.8,     // energy/s per unit of fluid depth under an Extractor
   extractorYieldCap: 24,   // max energy/s a single Extractor can produce
 
+  /* ---- Metal economy (v0.4) ----
+     A second resource. Barriers cost METAL to build and to repair (energy can't buy walls), and
+     metal is pulled from renewable DEPOSITS by Miners. Deposits are an overlay on the existing map
+     (markers on existing cells — terrain elevations and layout are unchanged). */
+  startMetal: 30,          // a few barriers' worth to open with; then you must mine
+  metalYield: 3.0,         // metal/s a connected Miner pulls when on/adjacent to a deposit
+  metalDeposits: [ {c:22,r:8}, {c:22,r:24}, {c:33,r:16} ], // small number; reaching/defending them matters
+
+  /* ---- Barrier (v0.4: a defended, ongoing investment — no longer a cheap one-time wall) ----
+     Barriers now have HP and are ERODED by the pressure they hold back: erosion scales with the
+     surface-height differential across the wall (deep reservoir on one side vs the lower/dry side).
+     At 0 HP a barrier BURSTS (removed; fluid floods through). Repair with the Repair tool, but
+     barrier repair costs METAL, not energy. */
+  barrier: {
+    hp: 70,                  // max health of a barrier
+    erodeStart: 1.0,         // surface differential below this barely erodes the wall
+    erosionRate: 2.2,        // HP/s lost per unit of differential past erodeStart
+    repairRate: 18,          // HP/s restored by a repair pump
+    repairCostPerHp: 0.4,    // METAL spent per HP restored
+  },
+
   /* ---- Timed construction (v0.3: the main anti-rush change) ----
      Placing a structure drops a BLUEPRINT that builds over buildTime seconds. A network
      blueprint only advances while it's within link range of an already-COMPLETED, connected
@@ -215,9 +241,9 @@ const CONFIG = {
      the deepest fluid (toughest), Relays the least. The Beacon is IMMUNE (no entry here), the
      Core is unaffected (it has its own instant-submerge loss), and Barriers stay dry (walls). */
   damage: {
-    hp:         { extractor: 120, relay: 55,  blaster: 80  }, // max health per structure type
-    startDepth: { extractor: 5.0, relay: 2.4, blaster: 3.0 }, // fluid depth at which damage begins
-    rate:       { extractor: 3.2, relay: 6.0, blaster: 4.5 }, // HP/s lost per unit of depth past start
+    hp:         { extractor: 120, relay: 55,  blaster: 80,  miner: 100 }, // max health per structure type
+    startDepth: { extractor: 5.0, relay: 2.4, blaster: 3.0, miner: 4.5 }, // fluid depth at which damage begins
+    rate:       { extractor: 3.2, relay: 6.0, blaster: 4.5, miner: 3.5 }, // HP/s lost per unit of depth past start
     lethalDepth: 8.0,        // depth labelled "lethal" in the hover risk readout
   },
   /* ---- Repair (spend energy to heal damaged structures) ---- */
@@ -239,10 +265,11 @@ const CONFIG = {
   beaconChargeRate: 3.5,   // % charge per second while powered (~29s of uptime to win)
 
   /* ---- Network ---- */
-  linkRange: { core:6.5, extractor:4.0, relay:9.0, blaster:4.5, beacon:4.5 },
+  linkRange: { core:6.5, extractor:4.0, relay:9.0, blaster:4.5, beacon:4.5, miner:4.0 },
 
-  /* ---- Build costs / refund ---- */
-  cost: { extractor:55, relay:25, blaster:80, barrier:10, beacon:300 },
+  /* ---- Build costs / refund ----
+     barrier cost is in METAL; everything else is in ENERGY (see costType()). */
+  cost: { extractor:55, relay:25, blaster:80, barrier:15, beacon:300, miner:50 },
   refundFrac: 0.5,
 
   /* ---- Key locations (hi-res grid coords) ---- */
@@ -289,11 +316,12 @@ const inb = (c, r) => c >= 0 && c < C && r >= 0 && r < R;
 const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
 const dist = (a, b) => Math.hypot(a.c - b.c, a.r - b.r);
 
-let elev   = new Uint8Array(N);     // terrain elevation level 0..3
-let depth  = new Float32Array(N);   // fluid depth above the floor
-let delta  = new Float32Array(N);   // scratch buffer for fluid flow
-let isWall = new Uint8Array(N);     // barrier present (blocks fluid)
-let occ    = new Array(N).fill(null); // structure occupying a cell (or null)
+let elev    = new Uint8Array(N);    // terrain elevation level 0..3
+let depth   = new Float32Array(N);  // fluid depth above the floor
+let delta   = new Float32Array(N);  // scratch buffer for fluid flow
+let isWall  = new Uint8Array(N);    // barrier present (blocks fluid)
+let deposit = new Uint8Array(N);    // metal deposit overlay (renewable; does NOT change terrain)
+let occ     = new Array(N).fill(null); // structure occupying a cell (or null)
 
 let structures = [];   // {type, c, r, active, cooldown, target, charge}
 let core = null;       // reference to the core structure
@@ -302,7 +330,9 @@ let beacon = null;     // reference to the beacon (or null)
 let game = {
   energy: CONFIG.startEnergy,
   energyPeak: CONFIG.startEnergy,
-  income: 0, cons: 0,        // displayed per-second rates
+  income: 0, cons: 0,        // displayed per-second energy rates
+  metal: CONFIG.startMetal,
+  metalIncome: 0, metalCons: 0, // displayed per-second metal rates
   tool: 'extractor',
   paused: false,
   speedIdx: 0,
@@ -329,15 +359,29 @@ function buildTerrain() {
 /* =====================================================================================
    STRUCTURE DEFINITIONS
    ===================================================================================== */
-const NETWORK_TYPES = { core:1, extractor:1, relay:1, blaster:1, beacon:1 };
-const DAMAGEABLE = { extractor:1, relay:1, blaster:1 }; // take gradual fluid damage; have HP + health bars
+const NETWORK_TYPES = { core:1, extractor:1, relay:1, blaster:1, beacon:1, miner:1 };
+const DAMAGEABLE = { extractor:1, relay:1, blaster:1, miner:1 }; // take depth-scaled fluid damage on their own cell
+// HAS_HEALTH = everything with HP + a health bar + repairable. Barriers join in v0.4 (eroded by pressure,
+// not by own-cell depth), so they have HP but are NOT in DAMAGEABLE (which is the own-cell-depth damage set).
+const HAS_HEALTH = { extractor:1, relay:1, blaster:1, miner:1, barrier:1 };
+const maxHpOf = (type) => type === 'barrier' ? CONFIG.barrier.hp : (CONFIG.damage.hp[type] || 0);
+const costType = (type) => type === 'barrier' ? 'metal' : 'energy';   // barriers are bought with metal
 const TOOLS = [
   { type:'extractor', name:'Extractor', color:'#ffb24a', desc:'Harvests fluid → energy. Deeper = more, toughest vs flood.' },
+  { type:'miner',     name:'Miner',     color:'#c2cad6', desc:'Mines metal from a deposit. Deep fluid damages it.' },
   { type:'relay',     name:'Relay',     color:'#3fe0d0', desc:'Extends network range. Fragile — keep it dry.' },
   { type:'blaster',   name:'Blaster',   color:'#ff6b5e', desc:'Burns energy to push fluid back.' },
-  { type:'barrier',   name:'Barrier',   color:'#9aa3b2', desc:'Cheap wall. Dam basins / block flow.' },
+  { type:'barrier',   name:'Barrier',   color:'#9aa3b2', desc:'Wall (costs metal). Erodes under pressure — repair it.' },
   { type:'beacon',    name:'Beacon',    color:'#ffe27a', desc:'WIN objective. Immune to fluid. Keep powered.' },
 ];
+// Is a cell on, or orthogonally/diagonally adjacent to, a metal deposit? (Miners harvest from these.)
+function nearDeposit(c, r) {
+  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+    const cc = c + dc, rr = r + dr;
+    if (inb(cc, rr) && deposit[idx(cc, rr)]) return true;
+  }
+  return false;
+}
 
 /* =====================================================================================
    PLACEMENT VALIDITY
@@ -349,11 +393,16 @@ function placeValidity(type, c, r) {
   if (occ[i]) return { ok:false, reason:'Cell occupied' };
   if (isWall[i]) return { ok:false, reason:'Cell occupied' };
   const cost = CONFIG.cost[type];
-  if (game.energy < cost) return { ok:false, reason:'Not enough energy (' + cost + ')' };
+  if (costType(type) === 'metal') {
+    if (game.metal < cost) return { ok:false, reason:'Not enough metal (' + cost + ')' };
+  } else if (game.energy < cost) {
+    return { ok:false, reason:'Not enough energy (' + cost + ')' };
+  }
   if (type === 'beacon') {
     if (beacon) return { ok:false, reason:'Beacon already placed' };
     if (elev[i] !== 0) return { ok:false, reason:'Beacon must go in the basin (lowest ground)' };
   }
+  if (type === 'miner' && !nearDeposit(c, r)) return { ok:false, reason:'Miner must be on or next to a metal deposit' };
   return { ok:true };
 }
 
@@ -361,11 +410,12 @@ function placeStructure(type, c, r) {
   const v = placeValidity(type, c, r);
   if (!v.ok) return false;
   const i = idx(c, r);
-  game.energy -= CONFIG.cost[type];               // cost charged up-front (refunded on sell/cancel)
+  if (costType(type) === 'metal') game.metal -= CONFIG.cost[type];   // barriers cost metal
+  else game.energy -= CONFIG.cost[type];                             // everything else costs energy
   // Every placement starts as a BLUEPRINT and constructs over time. A barrier does not block fluid
   // (isWall) until it finishes building — until then it's just a marked-out site.
   const s = { type, c, r, active:false, cooldown:0, target:null, charge:0,
-              hp: DAMAGEABLE[type] ? CONFIG.damage.hp[type] : 0, repairing:false, dps:0, yield:0,
+              hp: HAS_HEALTH[type] ? maxHpOf(type) : 0, repairing:false, dps:0, yield:0, metalYield:0, diff:0,
               building:true, buildProgress:0, buildTime: CONFIG.buildTime[type] || 0, buildConnected:false };
   if (type === 'beacon') beacon = s;
   occ[i] = s;
@@ -380,7 +430,8 @@ function removeAt(c, r) {
   const s = occ[i];
   if (!s) return false;
   if (s.type === 'core') return false; // cannot sell the core
-  game.energy += Math.round(CONFIG.cost[s.type] * CONFIG.refundFrac);
+  const refund = Math.round(CONFIG.cost[s.type] * CONFIG.refundFrac);
+  if (costType(s.type) === 'metal') game.metal += refund; else game.energy += refund; // refund in kind
   if (s.type === 'barrier') isWall[i] = 0;
   if (s === beacon) { beacon = null; updateBeaconHud(); }
   occ[i] = null;
@@ -491,6 +542,20 @@ function fluidStep(dt) {
   }
 }
 
+/* Surface-height differential a barrier is holding back: the spread between the highest and lowest
+   non-wall neighbour surfaces (elev*levelHeight + depth). Big spread = deep reservoir on one side and
+   lower/dry ground on the other = lots of pressure = fast erosion. Equal depth both sides ≈ 0. */
+function barrierDifferential(i, c, r) {
+  const H = CONFIG.levelHeight;
+  let hi = -Infinity, lo = Infinity, count = 0;
+  const consider = (n) => { if (isWall[n]) return; const s = elev[n]*H + depth[n]; if (s>hi) hi=s; if (s<lo) lo=s; count++; };
+  if (r > 0)   consider(i - C);
+  if (r < R-1) consider(i + C);
+  if (c > 0)   consider(i - 1);
+  if (c < C-1) consider(i + 1);
+  return count ? Math.max(0, hi - lo) : 0;
+}
+
 /* =====================================================================================
    ECONOMY + STRUCTURE LOGIC  (one game step of dt seconds)
    ===================================================================================== */
@@ -498,9 +563,10 @@ function simStep(dt) {
   recomputeNetwork();
   stepConstruction(dt);   // advance blueprints; completing one re-links the network for the next
 
-  // --- Income from Extractors (yield scales with fluid depth) + Core passive ---
+  // --- Income: Extractors → energy (∝ depth), Miners → metal (from deposits), + Core passive ---
   let income = CONFIG.coreIncome;
   let cons = 0;
+  let metalIncome = 0, metalCons = 0;
   const destroyed = [];
   for (const s of structures) {
     if (s.type === 'extractor') {
@@ -508,40 +574,81 @@ function simStep(dt) {
       const y = (s.active && d > 0) ? Math.min(CONFIG.extractorYield * d, CONFIG.extractorYieldCap) : 0;
       s.yield = y;          // exposed for the floating on-map number
       income += y;
+    } else if (s.type === 'miner') {
+      const m = (s.active && !s.building && nearDeposit(s.c, s.r)) ? CONFIG.metalYield : 0;
+      s.metalYield = m;     // exposed for the floating on-map number
+      metalIncome += m;
     }
   }
   game.energy += income * dt;
+  game.metal  += metalIncome * dt;
 
-  // --- Gradual fluid damage + player repair on damageable structures ---
-  //   Damage applies when fluid on the structure's OWN cell is deeper than startDepth[type];
-  //   the deeper the fluid the faster HP drains. A running repair pump heals over time and
-  //   burns energy. A structure can be damaged and repaired at once (you're bailing water).
+  // Snapshot HP so we can tell, after damage+repair, whether each structure is NET losing HP this
+  // step (drives the at-risk "!" flash) — a fully-maintained wall eroding-but-repaired isn't "at risk".
+  for (const s of structures) if (HAS_HEALTH[s.type] && !s.building) s._hp0 = s.hp;
+
+  // --- Gradual fluid damage: flood-damageable structures lose HP when fluid on their OWN cell is
+  //     deeper than startDepth[type]; the deeper the fluid, the faster it drains. ---
   for (const s of structures) {
     if (!DAMAGEABLE[s.type] || s.building) continue;  // blueprints don't erode until they're real
-    const maxHp = CONFIG.damage.hp[s.type];
     const d = depth[idx(s.c, s.r)];
     const start = CONFIG.damage.startDepth[s.type];
     const dps = d > start ? CONFIG.damage.rate[s.type] * (d - start) : 0;
     s.dps = dps;            // >0 means actively taking damage (drives the at-risk flash)
     if (dps > 0) s.hp -= dps * dt;
-    if (s.repairing) {
-      if (s.hp >= maxHp) { s.repairing = false; }
-      else if (game.energy > 0) {
-        const heal = Math.min(CONFIG.repair.rate * dt, maxHp - s.hp, game.energy / CONFIG.repair.costPerHp);
-        if (heal > 0) {
-          s.hp += heal;
-          game.energy -= heal * CONFIG.repair.costPerHp;
-          cons += CONFIG.repair.rate * CONFIG.repair.costPerHp; // approx /s rate for the HUD
-        }
-        if (s.hp >= maxHp) { s.hp = maxHp; s.repairing = false; }
-      }
-    }
-    if (s.hp <= 0) { s.hp = 0; destroyed.push(s); }
   }
 
-  // --- Remove destroyed structures (flooded past 0 HP) ---
+  // --- Barrier erosion (v0.4): a wall is worn down by the surface-height differential it dams.
+  //     Deep reservoir on one side + lower/dry on the other = high differential = fast erosion. ---
+  for (const s of structures) {
+    if (s.type !== 'barrier' || s.building) continue;
+    const diff = barrierDifferential(idx(s.c, s.r), s.c, s.r);
+    const ero = diff > CONFIG.barrier.erodeStart ? CONFIG.barrier.erosionRate * (diff - CONFIG.barrier.erodeStart) : 0;
+    s.diff = diff; s.dps = ero;   // dps reused for "actively eroding" (health bar + at-risk flash)
+    if (ero > 0) s.hp -= ero * dt;
+  }
+
+  // --- Repair pumps: energy heals flood structures, METAL heals barriers. A structure can erode and
+  //     repair at once — repair wins if you can pay the upkeep, the flood/pressure wins if you can't.
+  //     Barriers are a MAINTENANCE pump: it stays on (manual toggle off) and keeps topping up against
+  //     constant erosion. Flood structures auto-stop once fully repaired (one-time bail-out). ---
+  for (const s of structures) {
+    if (s.building || !HAS_HEALTH[s.type] || !s.repairing) continue;
+    const maxHp = maxHpOf(s.type);
+    if (s.type === 'barrier') {
+      if (s.hp < maxHp) {
+        const heal = Math.min(CONFIG.barrier.repairRate * dt, maxHp - s.hp, game.metal / CONFIG.barrier.repairCostPerHp);
+        if (heal > 0) {
+          s.hp += heal; game.metal -= heal * CONFIG.barrier.repairCostPerHp;
+          metalCons += heal * CONFIG.barrier.repairCostPerHp / dt; // actual /s spend for the HUD
+        }
+        if (s.hp > maxHp) s.hp = maxHp;
+      }
+      continue;  // pump stays armed (maintenance) — do NOT auto-stop at full
+    }
+    if (s.hp >= maxHp) { s.hp = maxHp; s.repairing = false; continue; }
+    if (game.energy > 0) {
+      const heal = Math.min(CONFIG.repair.rate * dt, maxHp - s.hp, game.energy / CONFIG.repair.costPerHp);
+      if (heal > 0) {
+        s.hp += heal; game.energy -= heal * CONFIG.repair.costPerHp;
+        cons += CONFIG.repair.rate * CONFIG.repair.costPerHp; // approx /s for the HUD
+      }
+    }
+    if (s.hp >= maxHp) { s.hp = maxHp; s.repairing = false; }
+  }
+
+  // Net-loss flag: at risk only if it actually lost HP this step (damage/erosion outran any repair).
+  for (const s of structures) if (HAS_HEALTH[s.type] && !s.building) s.losing = s.hp < s._hp0 - 1e-6;
+
+  // --- Destroy at 0 HP: flood structures are removed; a barrier BURSTS (wall gone, fluid floods in) ---
+  for (const s of structures) {
+    if (s.building || !HAS_HEALTH[s.type]) continue;
+    if (s.hp <= 0) { s.hp = 0; destroyed.push(s); }
+  }
   for (const s of destroyed) {
-    occ[idx(s.c, s.r)] = null;
+    const i = idx(s.c, s.r);
+    if (s.type === 'barrier') isWall[i] = 0;   // burst: the dam fails and fluid pours through next tick
+    occ[i] = null;
     structures = structures.filter(x => x !== s);
   }
   if (destroyed.length) recomputeNetwork();
@@ -593,9 +700,12 @@ function simStep(dt) {
   }
 
   game.energy = Math.max(0, game.energy);
+  game.metal  = Math.max(0, game.metal);
   game.energyPeak = Math.max(game.energyPeak, game.energy);
   game.income = income;
   game.cons = cons;
+  game.metalIncome = metalIncome;
+  game.metalCons = metalCons;
   game.time += dt;
 
   // --- Decay shot effects ---
@@ -688,6 +798,9 @@ function render() {
   for (let r = 0; r <= R; r++){ ctx.moveTo(0,r*PX+.5); ctx.lineTo(BW,r*PX+.5); }
   ctx.stroke();
 
+  // --- Metal deposits (overlay markers; drawn under structures so a Miner sits on top) ---
+  for (let i = 0; i < N; i++) if (deposit[i]) drawDeposit(i % C, (i / C) | 0);
+
   // --- Network connection lines (between active linked structures) ---
   const net = structures.filter(s => NETWORK_TYPES[s.type] && s.active);
   ctx.lineWidth = 1.5;
@@ -741,6 +854,23 @@ function roundRect(x,y,w,h,rad){ ctx.beginPath(); ctx.moveTo(x+rad,y);
   ctx.arcTo(x+w,y,x+w,y+h,rad); ctx.arcTo(x+w,y+h,x,y+h,rad);
   ctx.arcTo(x,y+h,x,y,rad); ctx.arcTo(x,y,x+w,y,rad); ctx.closePath(); }
 
+// Metal deposit: a steel hexagon marker overlaid on terrain (semi-transparent so fluid shows through).
+function drawDeposit(c, r) {
+  const cx = (c+.5)*PX, cy = (r+.5)*PX, rad = PX*0.34;
+  ctx.save();
+  ctx.beginPath();
+  for (let k = 0; k < 6; k++) {
+    const a = Math.PI/6 + k*Math.PI/3, px = cx + Math.cos(a)*rad, py = cy + Math.sin(a)*rad;
+    k ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(150,162,184,0.32)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(206,214,228,0.9)'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.fillStyle = 'rgba(222,230,242,0.85)';       // a little metal nugget in the middle
+  ctx.beginPath(); ctx.arc(cx, cy, PX*0.09, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
 function drawStructure(s) {
   const x = s.c*PX, y = s.r*PX, cx = x+PX/2, cy = y+PX/2;
   const building = s.building;
@@ -758,6 +888,13 @@ function drawStructure(s) {
     ctx.fillStyle = '#5a3c12'; roundRect(x+3,y+3,PX-6,PX-6,3); ctx.fill();
     ctx.strokeStyle = '#ffb24a'; ctx.lineWidth = 2; ctx.stroke();
     ctx.fillStyle = '#ffb24a'; ctx.beginPath(); ctx.arc(cx,cy,PX*0.16,0,Math.PI*2); ctx.fill();
+  }
+  else if (s.type === 'miner') {
+    ctx.fillStyle = '#2b3340'; roundRect(x+3,y+3,PX-6,PX-6,3); ctx.fill();
+    ctx.strokeStyle = '#c2cad6'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = '#dbe2ee'; ctx.lineWidth = 1.5;       // a steel cog
+    ctx.beginPath(); ctx.arc(cx,cy,PX*0.15,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle = '#c2cad6'; ctx.beginPath(); ctx.arc(cx,cy,PX*0.06,0,Math.PI*2); ctx.fill();
   }
   else if (s.type === 'relay') {
     ctx.fillStyle = '#0e4b46'; ctx.strokeStyle = '#3fe0d0'; ctx.lineWidth = 2;
@@ -820,8 +957,8 @@ function drawStructure(s) {
     ctx.beginPath(); ctx.arc(cx, cy, PX*0.5, 0, Math.PI*2); ctx.stroke();
   }
 
-  // --- At-risk flash: any damageable structure currently taking fluid damage ---
-  if (DAMAGEABLE[s.type] && s.dps > 0) {
+  // --- At-risk flash: any HP structure NET-losing HP this step (damage/erosion outpacing repair) ---
+  if (HAS_HEALTH[s.type] && s.losing) {
     const p = pulse();
     ctx.strokeStyle = 'rgba(255,70,70,' + (0.5+0.5*p).toFixed(2) + ')';
     ctx.lineWidth = 2.5; roundRect(x+1,y+1,PX-2,PX-2,4); ctx.stroke();
@@ -836,21 +973,27 @@ function drawStructure(s) {
     ctx.setLineDash([3,3]); roundRect(x+1,y+1,PX-2,PX-2,4); ctx.stroke(); ctx.setLineDash([]);
   }
 
-  // --- Health bar on every damageable structure (the headline readability feature) ---
-  if (DAMAGEABLE[s.type]) {
-    const maxHp = CONFIG.damage.hp[s.type], frac = clamp(s.hp / maxHp, 0, 1);
+  // --- Health bar on every HP structure (Extractor/Relay/Blaster/Miner + v0.4 Barrier) ---
+  if (HAS_HEALTH[s.type]) {
+    const maxHp = maxHpOf(s.type), frac = clamp(s.hp / maxHp, 0, 1);
     const bw = PX-6, bh = 3, bx = x+3, by = y+1.5;
     ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(bx-1, by-1, bw+2, bh+2);
     ctx.fillStyle = frac > 0.6 ? '#5dd47b' : frac > 0.3 ? '#ffb24a' : '#ff5a4a';
     ctx.fillRect(bx, by, bw*frac, bh);
   }
 
-  // --- Floating energy yield on producing Extractors ---
+  // --- Floating yield numbers: Extractor energy (white), Miner metal (steel) ---
   if (s.type === 'extractor' && s.active && s.yield > 0.05) {
     const txt = '+' + (s.yield >= 10 ? Math.round(s.yield) : s.yield.toFixed(1));
     ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillText(txt, cx+0.5, y+PX-2+0.5);
     ctx.fillStyle = '#ffffff'; ctx.fillText(txt, cx, y+PX-2);   // v0.3: white (was amber, too close to the Extractor)
+  }
+  if (s.type === 'miner' && s.active && s.metalYield > 0.05) {
+    const txt = '+' + s.metalYield.toFixed(1);
+    ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillText(txt, cx+0.5, y+PX-2+0.5);
+    ctx.fillStyle = '#dbe2ee'; ctx.fillText(txt, cx, y+PX-2);   // steel for metal
   }
 }
 
@@ -866,7 +1009,7 @@ function drawHover() {
   }
   if (game.tool === 'repair') {
     const s = occ[idx(c,r)];
-    const ok = s && DAMAGEABLE[s.type];
+    const ok = s && HAS_HEALTH[s.type];
     ctx.strokeStyle = ok ? 'rgba(93,212,123,0.95)' : 'rgba(93,212,123,0.3)';
     ctx.lineWidth = 2; roundRect(x+1,y+1,PX-2,PX-2,4); ctx.stroke();
     return;
@@ -910,6 +1053,11 @@ function updateHud() {
   const ns = $('netStat');
   ns.textContent = (net>=0?'+':'') + net.toFixed(1) + '/s';
   ns.className = 'val net ' + (net>=0?'pos':'neg');
+  // metal: stored + net/s (mirrors the energy stat)
+  $('metalVal').textContent = Math.floor(game.metal);
+  const mnet = game.metalIncome - game.metalCons, me = $('metalNet');
+  me.textContent = (mnet>=0?'+':'') + mnet.toFixed(1) + '/s';
+  me.className = 'net ' + (mnet>=0?'pos':'neg');
   updateBeaconHud();
 }
 function updateBeaconHud() {
@@ -940,18 +1088,22 @@ function updateCellTip(e) {
   let html = '<div class="ct-risk" style="color:' + rk.color + '">' + rk.label + '</div>' +
              '<div class="ct-row">Depth <b>' + d.toFixed(2) + '</b> · Elev ' + elev[i] + '</div>';
   const s = occ[i];
-  if (s && DAMAGEABLE[s.type]) {
-    const pct = Math.max(0, Math.round(s.hp / CONFIG.damage.hp[s.type] * 100));
-    const extra = (s.type === 'extractor' && s.yield > 0.05) ? ' · +' + s.yield.toFixed(1) + '/s' : '';
-    html += '<div class="ct-row"><b style="text-transform:capitalize">' + s.type + '</b> · HP ' + pct + '%' + extra +
-            (s.repairing ? ' · <span style="color:#5dd47b">repairing</span>' : '') + '</div>';
+  if (s && HAS_HEALTH[s.type]) {
+    const pct = Math.max(0, Math.round(s.hp / maxHpOf(s.type) * 100));
+    let extra = '';
+    if (s.type === 'extractor' && s.yield > 0.05) extra = ' · +' + s.yield.toFixed(1) + '/s';
+    else if (s.type === 'miner' && s.metalYield > 0.05) extra = ' · +' + s.metalYield.toFixed(1) + ' metal/s';
+    const status = s.building   ? ' · <span style="color:#3fe0d0">building ' + Math.round((s.buildProgress/s.buildTime)*100) + '%</span>'
+                 : s.repairing  ? ' · <span style="color:#5dd47b">repairing</span>'
+                 : (s.dps > 0)  ? ' · <span style="color:#ff6b5e">' + (s.type==='barrier'?'eroding':'taking damage') + '</span>'
+                 : '';
+    html += '<div class="ct-row"><b style="text-transform:capitalize">' + s.type + '</b> · HP ' + pct + '%' + extra + status + '</div>';
   } else if (s && s.type === 'beacon') {
     html += '<div class="ct-row"><b>Beacon</b> · immune · ' + Math.floor(s.charge) + '%</div>';
   } else if (s && s.type === 'core') {
     html += '<div class="ct-row"><b>Core</b> · lose if submerged</div>';
-  } else if (s && s.type === 'barrier') {
-    html += '<div class="ct-row"><b>Barrier</b> · blocks fluid</div>';
   }
+  if (deposit[i]) html += '<div class="ct-row"><b style="color:#c2cad6">⬢ Metal deposit</b> · renewable</div>';
   tip.innerHTML = html;
   const br = document.getElementById('board').getBoundingClientRect();
   tip.style.left = (e.clientX - br.left) + 'px';
@@ -969,9 +1121,13 @@ function buildToolbar() {
     const el = document.createElement('div');
     el.className = 'tool' + (game.tool===t.type?' sel':'');
     el.dataset.type = t.type;
+    const metal = costType(t.type) === 'metal';
+    const costHtml = metal
+      ? '<div class="tcost" style="color:#c2cad6">⬢ '+CONFIG.cost[t.type]+' metal</div>'
+      : '<div class="tcost">⚡ '+CONFIG.cost[t.type]+'</div>';
     el.innerHTML =
       '<div class="tname"><span class="swatch" style="background:'+t.color+'"></span>'+t.name+'</div>'+
-      '<div class="tcost">⚡ '+CONFIG.cost[t.type]+'</div>'+
+      costHtml +
       '<div class="tdesc">'+t.desc+'</div>';
     el.onclick = () => selectTool(t.type);
     tb.appendChild(el);
@@ -980,8 +1136,8 @@ function buildToolbar() {
   rep.className = 'tool rep' + (game.tool==='repair'?' sel':'');
   rep.dataset.type = 'repair';
   rep.innerHTML = '<div class="tname"><span class="swatch" style="background:var(--green)"></span>Repair</div>'+
-                  '<div class="tcost" style="color:var(--green)">⚡ '+CONFIG.repair.costPerHp+' / HP</div>'+
-                  '<div class="tdesc">Toggle a repair pump on a damaged structure.</div>';
+                  '<div class="tcost" style="color:var(--green)">⚡ '+CONFIG.repair.costPerHp+'/HP · ⬢ '+CONFIG.barrier.repairCostPerHp+'/HP wall</div>'+
+                  '<div class="tdesc">Repair pump: energy heals; barriers cost metal.</div>';
   rep.onclick = () => selectTool('repair');
   tb.appendChild(rep);
   const del = document.createElement('div');
@@ -1002,7 +1158,8 @@ function refreshToolAffordability() {
   document.querySelectorAll('.tool').forEach(el => {
     const t = el.dataset.type;
     if (CONFIG.cost[t] === undefined) return; // delete / repair have no build cost
-    el.classList.toggle('cant', game.energy < CONFIG.cost[t]);
+    const pool = costType(t) === 'metal' ? game.metal : game.energy;
+    el.classList.toggle('cant', pool < CONFIG.cost[t]);
   });
 }
 
@@ -1030,11 +1187,13 @@ cv.addEventListener('click', e => {
   }
 });
 
-// Repair tool: toggle a repair pump on a damaged structure (heals over time, costs energy).
+// Repair tool: toggle a repair pump on a damaged structure (energy heals; barriers cost metal).
 function tryRepair(c, r) {
   const s = occ[idx(c, r)];
-  if (!s || !DAMAGEABLE[s.type]) { flashHint('Repair: click a damaged Extractor / Relay / Blaster'); return; }
-  if (s.hp >= CONFIG.damage.hp[s.type] && !s.repairing) { flashHint('Already at full health'); return; }
+  if (!s || !HAS_HEALTH[s.type]) { flashHint('Repair: click an Extractor / Miner / Relay / Blaster / Barrier'); return; }
+  if (s.building) { flashHint('Still under construction'); return; }
+  // Barriers can be pre-armed at full HP (maintenance pump); flood structures only when damaged.
+  if (s.type !== 'barrier' && s.hp >= maxHpOf(s.type) && !s.repairing) { flashHint('Already at full health'); return; }
   s.repairing = !s.repairing;
 }
 cv.addEventListener('contextmenu', e => {
@@ -1071,16 +1230,18 @@ $('btnRestartLose').onclick = restart;
    ===================================================================================== */
 function init() {
   elev = new Uint8Array(N); depth = new Float32Array(N); delta = new Float32Array(N);
-  isWall = new Uint8Array(N); occ = new Array(N).fill(null);
+  isWall = new Uint8Array(N); deposit = new Uint8Array(N); occ = new Array(N).fill(null);
   structures = []; beacon = null;
   buildTerrain();
   for (let i = 0; i < N; i++) if (elev[i] === 0) depth[i] = CONFIG.basinPrefill; // pre-flood the basin
+  for (const dpt of CONFIG.metalDeposits) if (inb(dpt.c, dpt.r)) deposit[idx(dpt.c, dpt.r)] = 1; // overlay deposits
   core = { type:'core', c:CONFIG.core.c, r:CONFIG.core.r, active:true };
   occ[idx(core.c, core.r)] = core;
   structures.push(core);
   game = {
     energy: CONFIG.startEnergy, energyPeak: CONFIG.startEnergy,
-    income:0, cons:0, tool:'extractor', paused:false, speedIdx:0,
+    income:0, cons:0, metal: CONFIG.startMetal, metalIncome:0, metalCons:0,
+    tool:'extractor', paused:false, speedIdx:0,
     over:null, time:0, hover:{c:-1,r:-1}, shots:[],
   };
   recomputeNetwork();
@@ -1119,20 +1280,22 @@ function frame(now) {
 
 /* ---- Test/automation hook (harmless; used for the visual self-test loop) ---- */
 window.HTH = {
-  get state(){ return game; }, CONFIG, depth:()=>depth, elev:()=>elev,
+  get state(){ return game; }, CONFIG, depth:()=>depth, elev:()=>elev, deposits:()=>deposit,
   place:(type,c,r)=>placeStructure(type,c,r),
   removeAt:(c,r)=>removeAt(c,r),
   step:(n=1)=>{ const dt=CONFIG.fluidTickMs/1000; for(let i=0;i<n;i++){ fluidStep(dt); simStep(dt); } },
   setEnergy:v=>{ game.energy=v; },
+  setMetal:v=>{ game.metal=v; },
+  metal:()=> game.metal,
   setSpeed:i=>{ game.speedIdx=i; },
   beaconCharge:()=> beacon ? beacon.charge : null,
   setBeaconCharge:v=>{ if(beacon) beacon.charge=v; },
   emitterFill:(n)=>{ const dt=CONFIG.fluidTickMs/1000; for(let i=0;i<n;i++) fluidStep(dt); },
-  structs:()=> structures.map(s=>({t:s.type,c:s.c,r:s.r,hp:s.hp,active:s.active,y:s.yield,dps:s.dps,rep:s.repairing,
+  structs:()=> structures.map(s=>({t:s.type,c:s.c,r:s.r,hp:s.hp,active:s.active,y:s.yield,my:s.metalYield,dps:s.dps,diff:s.diff,lose:s.losing,rep:s.repairing,
                                    bld:!!s.building,bp:s.buildProgress,bt:s.buildTime,bcon:s.buildConnected})),
   finishBuilds:()=>{ for(const s of structures){ if(s.building){ s.building=false; s.buildProgress=s.buildTime;
                        if(s.type==='barrier'){ const i=idx(s.c,s.r); isWall[i]=1; depth[i]=0; } } } recomputeNetwork(); },
-  repairAt:(c,r,on)=>{ const s=occ[idx(c,r)]; if(s&&DAMAGEABLE[s.type]) s.repairing = (on===undefined? !s.repairing : !!on); },
+  repairAt:(c,r,on)=>{ const s=occ[idx(c,r)]; if(s&&HAS_HEALTH[s.type]) s.repairing = (on===undefined? !s.repairing : !!on); },
 };
 
 setupCanvas();

@@ -2,6 +2,38 @@
 
 All notable changes to **Harvest the Hazard**. One entry per released version.
 
+## v0.4 — 2026-06-20
+Barrier rework (anti-cheese) + a second resource. Previously you could cheese a win by spamming
+cheap Barriers to wall the fluid off entirely. v0.4 makes walling a **defended, ongoing investment**.
+
+- **Barrier erosion + repair.** Barriers now have **HP and a health bar** and are **eroded by the
+  pressure they hold back**: erosion scales with the surface-height differential across the wall (deep
+  reservoir on one side vs the lower/dry side), so the deeper the reservoir a barrier dams, the faster
+  it wears down — a barrier with little differential barely erodes. At **0 HP a barrier BURSTS** (it's
+  removed and fluid floods through). Repair them with the existing Repair tool, but **barrier repair
+  costs METAL**; a barrier's pump is a *maintenance* pump (stays on, continuously topping up against
+  erosion) rather than a one-time heal. All erosion/repair numbers live in `CONFIG.barrier`.
+- **Metal economy (second resource).** Barriers now **cost metal** to build (not energy).
+  - **Metal deposits** are a renewable overlay on the existing map (steel-hexagon markers on existing
+    cells — terrain elevations/layout are unchanged). A small number (3), placed in the contested
+    mid-ground so reaching and defending them matters.
+  - **Miner** (new toolbar tool): built on/adjacent to a deposit and connected, it harvests metal/s
+    into a global pool. It's flood-damageable like an Extractor (HP + health bar) and obeys the v0.3
+    build-time system. Miners cost energy (you bootstrap: energy → miners → metal → walls).
+  - **HUD:** a metal counter + net metal/s, mirroring the energy stat. The Barrier toolbar entry shows
+    its **metal** cost; the Repair entry shows both energy and metal (wall) rates.
+- **Why it stops the cheese:** walling a big basin is now self-limiting — a deep dam erodes fast and
+  costs a lot of metal/s to maintain (the 23-barrier showcase dam costs ~47 metal/s ≈ 16 miners), so
+  you wall *strategically* and keep miners alive to fund it, instead of spamming a one-time wall.
+- **Readability:** the at-risk "!" flash now triggers on **net** HP loss (a fully-maintained eroding
+  wall no longer false-alarms); Miners show a steel floating metal-yield number; deposits and barrier
+  HP/erosion appear in the hover readout.
+- **Kept intact:** the green→blue→purple fluid style, terrain elevations/layout, the win (charge Beacon
+  100%) and lose (Core submerged) conditions, the mouse-only scheme, and all v0.2/v0.3 features.
+- Updated the how-to panel, refreshed `DESIGN.md`, added `snapshots/v0.4.png`, and extended the
+  self-test (`.dev/shot.mjs`): new `metal` (miners + eroding dam) and `erode` (unrepaired dam bursts)
+  scenarios, `setMetal()`/`metal()` hooks, and metal/erosion fields in the state dump.
+
 ## v0.3 — 2026-06-20
 Pacing & difficulty pass. The old game could be won in ~10 seconds (instant relay line → drop
 Beacon → fast-forward). v0.3 makes it a deliberate, multi-minute game at a MEDIUM difficulty.
