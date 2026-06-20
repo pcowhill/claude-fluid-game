@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Harvest the Hazard — v0.2</title>
+<title>Harvest the Hazard — v0.3</title>
 <style>
   :root{
     --bg:#0a0d13;
@@ -142,6 +142,7 @@
       <li><b style="color:var(--green)">Repair</b> spends energy to heal a damaged structure — toggle a repair pump from the toolbar so flood damage isn't permanent.</li>
       <li><b class="obj">Beacon</b> — build it in the deadly basin and keep it powered. It's <b>immune</b> to the fluid. <span class="obj">Charge it to 100% to WIN.</span></li>
     </ul>
+    <p><b>Everything takes time to build.</b> A placed structure is a <b style="color:var(--cyan)">blueprint</b> that only starts constructing once the network reaches it through a finished structure — so a relay line builds <b>one segment at a time</b>. Plan ahead.</p>
     <p><b class="danger">You lose if the fluid submerges your Core Base.</b> Keep it off the high ground!</p>
     <button class="bigbtn" id="btnStart">Start Harvesting</button>
     <div class="sub">Mouse only • Use ▶ to fast-forward • Right-click to sell a structure</div>
@@ -171,7 +172,7 @@
 <script>
 "use strict";
 /* =====================================================================================
-   HARVEST THE HAZARD  —  v0.2
+   HARVEST THE HAZARD  —  v0.3
    Single-file vanilla JS + Canvas. No dependencies. Open index.html directly.
    ALL tunable gameplay numbers live in CONFIG below.
    ===================================================================================== */
@@ -194,11 +195,19 @@ const CONFIG = {
   fluidRenderMin: 0.05,    // fluid shallower than this is invisible (render-only, no mass loss)
   fluidVisMax: 6.0,        // depth that renders at full intensity
 
-  /* ---- Economy ---- */
-  startEnergy: 260,
-  coreIncome: 1.5,         // passive energy/s from the Core
-  extractorYield: 2.3,     // energy/s per unit of fluid depth under an Extractor
-  extractorYieldCap: 34,   // max energy/s a single Extractor can produce
+  /* ---- Economy (v0.3: slowed so you can't afford an instant board-spanning build-out) ---- */
+  startEnergy: 200,        // enough to open a reaching relay line + a first Extractor, not a whole board
+  coreIncome: 1.0,         // passive energy/s from the Core
+  extractorYield: 1.8,     // energy/s per unit of fluid depth under an Extractor
+  extractorYieldCap: 24,   // max energy/s a single Extractor can produce
+
+  /* ---- Timed construction (v0.3: the main anti-rush change) ----
+     Placing a structure drops a BLUEPRINT that builds over buildTime seconds. A network
+     blueprint only advances while it's within link range of an already-COMPLETED, connected
+     structure (the Core counts); a chain of relays therefore serializes (each finishes before
+     the next can start). Barriers are off-network walls and build on their own. While building
+     a structure is inactive (produces/blasts/charges nothing) and does NOT extend the network. */
+  buildTime: { extractor:6, relay:5, blaster:8, barrier:2, beacon:28, miner:6 }, // seconds to construct
 
   /* ---- Fluid damage to structures (gradual, depth-scaled) ----
      A structure takes damage when the fluid on ITS OWN cell is deeper than startDepth[type];
@@ -352,21 +361,15 @@ function placeStructure(type, c, r) {
   const v = placeValidity(type, c, r);
   if (!v.ok) return false;
   const i = idx(c, r);
-  game.energy -= CONFIG.cost[type];
-  if (type === 'barrier') {
-    isWall[i] = 1;
-    depth[i] = 0;
-    const s = { type, c, r };
-    occ[i] = s;
-    structures.push(s);
-  } else {
-    const s = { type, c, r, active:false, cooldown:0, target:null, charge:0,
-                hp: DAMAGEABLE[type] ? CONFIG.damage.hp[type] : 0, repairing:false,
-                dps:0, yield:0 };
-    if (type === 'beacon') beacon = s;
-    occ[i] = s;
-    structures.push(s);
-  }
+  game.energy -= CONFIG.cost[type];               // cost charged up-front (refunded on sell/cancel)
+  // Every placement starts as a BLUEPRINT and constructs over time. A barrier does not block fluid
+  // (isWall) until it finishes building — until then it's just a marked-out site.
+  const s = { type, c, r, active:false, cooldown:0, target:null, charge:0,
+              hp: DAMAGEABLE[type] ? CONFIG.damage.hp[type] : 0, repairing:false, dps:0, yield:0,
+              building:true, buildProgress:0, buildTime: CONFIG.buildTime[type] || 0, buildConnected:false };
+  if (type === 'beacon') beacon = s;
+  occ[i] = s;
+  structures.push(s);
   recomputeNetwork();
   return true;
 }
@@ -391,7 +394,9 @@ function removeAt(c, r) {
    Two structures link if their distance <= max(range A, range B).
    ===================================================================================== */
 function recomputeNetwork() {
-  const net = structures.filter(s => NETWORK_TYPES[s.type]);
+  // Only COMPLETED structures participate in the network: a blueprint is neither active nor a
+  // relay-point for the BFS, which is exactly what serializes a chain of under-construction relays.
+  const net = structures.filter(s => NETWORK_TYPES[s.type] && !s.building);
   net.forEach(s => s.active = false);
   if (!core) return;
   core.active = true;
@@ -405,6 +410,42 @@ function recomputeNetwork() {
       if (dist(a, b) <= reach) { b.active = true; q.push(b); }
     }
   }
+}
+
+/* =====================================================================================
+   CONSTRUCTION  (timed, sequential blueprints)
+   A network blueprint advances only while within link range of a COMPLETED, connected
+   structure; finishing it lets the network reach onward (so the next link in a chain can
+   then start). Barriers build on their own (they're off-network walls). Concurrency is
+   "parallel on the network": every eligible blueprint builds at once, but chains serialize.
+   ===================================================================================== */
+function stepConstruction(dt) {
+  let completed = false;
+  for (const s of structures) {
+    if (!s.building) continue;
+    let go;
+    if (!NETWORK_TYPES[s.type]) {
+      go = true;                                  // barriers / off-network sites build independently
+    } else {
+      go = false;
+      const rng = CONFIG.linkRange[s.type];
+      for (const o of structures) {
+        if (o.building || !o.active || !NETWORK_TYPES[o.type]) continue; // need a finished, live neighbour
+        if (dist(s, o) <= Math.max(rng, CONFIG.linkRange[o.type])) { go = true; break; }
+      }
+    }
+    s.buildConnected = go;
+    if (go) {
+      s.buildProgress += dt;
+      if (s.buildProgress >= s.buildTime) {
+        s.buildProgress = s.buildTime;
+        s.building = false;
+        if (s.type === 'barrier') { const i = idx(s.c, s.r); isWall[i] = 1; depth[i] = 0; } // now a real wall
+        completed = true;
+      }
+    }
+  }
+  if (completed) recomputeNetwork();              // newly-finished structures extend the network
 }
 
 /* =====================================================================================
@@ -455,6 +496,7 @@ function fluidStep(dt) {
    ===================================================================================== */
 function simStep(dt) {
   recomputeNetwork();
+  stepConstruction(dt);   // advance blueprints; completing one re-links the network for the next
 
   // --- Income from Extractors (yield scales with fluid depth) + Core passive ---
   let income = CONFIG.coreIncome;
@@ -475,7 +517,7 @@ function simStep(dt) {
   //   the deeper the fluid the faster HP drains. A running repair pump heals over time and
   //   burns energy. A structure can be damaged and repaired at once (you're bailing water).
   for (const s of structures) {
-    if (!DAMAGEABLE[s.type]) continue;
+    if (!DAMAGEABLE[s.type] || s.building) continue;  // blueprints don't erode until they're real
     const maxHp = CONFIG.damage.hp[s.type];
     const d = depth[idx(s.c, s.r)];
     const start = CONFIG.damage.startDepth[s.type];
@@ -701,9 +743,11 @@ function roundRect(x,y,w,h,rad){ ctx.beginPath(); ctx.moveTo(x+rad,y);
 
 function drawStructure(s) {
   const x = s.c*PX, y = s.r*PX, cx = x+PX/2, cy = y+PX/2;
+  const building = s.building;
   const inactive = NETWORK_TYPES[s.type] && !s.active && s.type !== 'core';
   ctx.save();
-  if (inactive) ctx.globalAlpha = 0.45;
+  if (building) ctx.globalAlpha = 0.32;           // dim "under construction" ghost of the structure
+  else if (inactive) ctx.globalAlpha = 0.45;
 
   if (s.type === 'core') {
     ctx.fillStyle = '#1c3a5e'; roundRect(x+2,y+2,PX-4,PX-4,4); ctx.fill();
@@ -755,6 +799,19 @@ function drawStructure(s) {
 
   ctx.restore();
 
+  // --- Under construction: radial progress ring over the dim ghost (cyan = building, grey = waiting) ---
+  if (building) {
+    const frac = clamp(s.buildTime > 0 ? s.buildProgress / s.buildTime : 1, 0, 1);
+    ctx.strokeStyle = 'rgba(255,255,255,0.16)'; ctx.lineWidth = 3;          // track
+    ctx.beginPath(); ctx.arc(cx, cy, PX*0.44, 0, Math.PI*2); ctx.stroke();
+    ctx.strokeStyle = s.buildConnected ? '#3fe0d0' : '#8493ac'; ctx.lineWidth = 3; // progress
+    ctx.beginPath(); ctx.arc(cx, cy, PX*0.44, -Math.PI/2, -Math.PI/2 + Math.PI*2*frac); ctx.stroke();
+    ctx.fillStyle = s.buildConnected ? 'rgba(63,224,208,0.92)' : 'rgba(132,147,172,0.92)';
+    ctx.font = 'bold 8px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(s.buildConnected ? Math.round(frac*100)+'%' : 'wait', cx, cy+0.5);
+    return;                                          // a blueprint shows no HP bar / yield / at-risk flash
+  }
+
   // --- Repair pump running: green pulsing ring ---
   if (s.repairing) {
     const p = pulse();
@@ -793,7 +850,7 @@ function drawStructure(s) {
     const txt = '+' + (s.yield >= 10 ? Math.round(s.yield) : s.yield.toFixed(1));
     ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillText(txt, cx+0.5, y+PX-2+0.5);
-    ctx.fillStyle = '#ffd982'; ctx.fillText(txt, cx, y+PX-2);
+    ctx.fillStyle = '#ffffff'; ctx.fillText(txt, cx, y+PX-2);   // v0.3: white (was amber, too close to the Extractor)
   }
 }
 
@@ -1071,7 +1128,10 @@ window.HTH = {
   beaconCharge:()=> beacon ? beacon.charge : null,
   setBeaconCharge:v=>{ if(beacon) beacon.charge=v; },
   emitterFill:(n)=>{ const dt=CONFIG.fluidTickMs/1000; for(let i=0;i<n;i++) fluidStep(dt); },
-  structs:()=> structures.map(s=>({t:s.type,c:s.c,r:s.r,hp:s.hp,active:s.active,y:s.yield,dps:s.dps,rep:s.repairing})),
+  structs:()=> structures.map(s=>({t:s.type,c:s.c,r:s.r,hp:s.hp,active:s.active,y:s.yield,dps:s.dps,rep:s.repairing,
+                                   bld:!!s.building,bp:s.buildProgress,bt:s.buildTime,bcon:s.buildConnected})),
+  finishBuilds:()=>{ for(const s of structures){ if(s.building){ s.building=false; s.buildProgress=s.buildTime;
+                       if(s.type==='barrier'){ const i=idx(s.c,s.r); isWall[i]=1; depth[i]=0; } } } recomputeNetwork(); },
   repairAt:(c,r,on)=>{ const s=occ[idx(c,r)]; if(s&&DAMAGEABLE[s.type]) s.repairing = (on===undefined? !s.repairing : !!on); },
 };
 

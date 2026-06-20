@@ -72,6 +72,26 @@ accumulating damage is obvious well before destruction.
   energy runs out). A structure can be damaged and repaired at once — repair wins at shallow/moderate
   depth, the flood wins if it's too deep. A green ring marks a running pump.
 
+## Construction (v0.3)
+Structures are **not** built instantly. Placing one drops a **blueprint** that constructs over
+`buildTime[type]` seconds (scales with cost — a Barrier is quick, a Beacon slow). This is the main
+anti-rush mechanic.
+- **Network gating / serialization.** A network blueprint only *advances* while it is within link
+  range of an already-**completed**, connected structure (the Core counts as completed). While
+  building it is **inactive** — it produces/blasts/charges nothing **and does not relay the network
+  onward**. So a line of relays serializes: relay #1 (next to the Core) builds first; only when it
+  *finishes* does relay #2 become network-connected and start, then #3… You may pre-place a whole
+  line (paying up front) and it fills in segment-by-segment as the network reaches each one.
+- **Parallel on the network.** Every blueprint that *does* have a completed, connected neighbour
+  builds simultaneously — only true dependency chains serialize.
+- **Barriers** are off-network walls: they build on their own timer (no network needed) and only
+  start **blocking fluid** once complete (a building barrier is just a marked-out, passable site).
+- **Beacon** builds like everything else and only begins charging once complete. **Core** is pre-built.
+- **Readout:** a radial progress ring over a dim "ghost" of the structure — cyan with a live `%`
+  while building, grey `wait` while still waiting for the network to arrive.
+- **Cost/refund:** the build cost is charged when the blueprint is placed; selling/cancelling a
+  blueprint (even mid-build) returns the normal partial refund.
+
 ## Network & energy
 - Global stored-energy pool + per-second income from Extractors (scaled by depth) and the Core,
   minus consumption (Blasters firing, Beacon charging). Build costs deducted instantly.
@@ -86,7 +106,8 @@ accumulating damage is obvious well before destruction.
 - Win and lose screens, each with a Restart button.
 
 ## Controls & UI (mouse only)
-- Build toolbar to select a structure; click a valid cell to place; auto-connect if in range.
+- Build toolbar to select a structure; click a valid cell to place a **blueprint** (it then builds
+  over time — see *Construction*); auto-connect if in range.
 - **Repair tool** — click a damaged structure to toggle its repair pump (heals over time, costs energy).
 - Right-click (or the Sell/Delete tool) removes a structure for a partial refund.
 - **Hover readout** — a tooltip follows the cursor showing the exact **fluid depth**, the **risk level**
@@ -157,6 +178,30 @@ Focus of the version: make live state read at a glance, anchored by a real damag
 - **Damage `s.yield`/`s.dps`/`s.hp` fields** are exposed via `window.HTH.structs()` for the self-test
   state dump; the harness `hero` scenario now showcases a mid-repair, deeply-flooded reservoir.
 
+## Implementation notes & decisions (v0.3)
+Focus of the version: kill the ~10-second rush-win and make it a deliberate, multi-minute MEDIUM game.
+
+- **Timed construction is the real fix.** Even with infinite energy, a naive relay-line-to-the-basin
+  can no longer rush a win: the chain serializes (each relay must finish before the next can start),
+  and a bare line shoved through the deep basin gets eroded before it ever reaches a Beacon — you have
+  to *defend* the push (dam/blast/repair). The economy nerf is secondary: it just makes the opening
+  deliberate instead of an instant full board.
+- **Blueprints are real structure objects** (`building/buildProgress/buildTime/buildConnected`) excluded
+  from the network BFS, so they don't relay or activate until complete — that exclusion is exactly what
+  serializes a chain. Construction is advanced in `stepConstruction(dt)` inside `simStep`; finishing any
+  blueprint re-runs `recomputeNetwork()` so the next link can start the same tick.
+- **Barriers build off-network.** Requiring a network connection to build a wall would break damming a
+  far-off basin, so barriers build on their own short timer and only set `isWall`/force-dry their cell
+  on completion (until then fluid flows through the site).
+- **Blueprints don't take fluid damage** (skipped in the damage pass) — a site under construction can't
+  be eroded before it exists; HP starts full on completion. They also show no HP bar/yield/at-risk flash,
+  just the build ring.
+- **Economy snowball is a known lever.** Once several Extractors are up, the ever-rising flood pushes
+  their depth-scaled yield toward the cap and cheap repair keeps deep ones alive, so late-game income
+  outpaces the Beacon's draw. That's acceptable for v0.3 (the skill is the opening + the Beacon hookup);
+  v0.4's scarce **metal** upkeep (barrier erosion costs metal to repair) adds a parallel cost that
+  doesn't snowball the same way. Repair-cost rebalancing remains a future target.
+
 ## Tuning quick-reference (current `CONFIG`)
 | Knob | Value | Notes |
 |------|-------|-------|
@@ -165,7 +210,8 @@ Focus of the version: make live state read at a glance, anchored by a real damag
 | emitterRate | 10.0 /s | flood pressure / escalation speed (v0.2: ↑ from 7.0) |
 | basinPrefill | 3.6 | starting basin depth / instant hazard (v0.2: ↑ from 2.6) |
 | flowRate | 0.25 | per-tick share of surface diff (≤0.25 = stable) |
-| extractorYield | 2.3 /depth/s | cap 34/s; live yield shown on-map |
+| extractorYield | 1.8 /depth/s | v0.3: ↓ from 2.3; cap 24/s (↓ from 34); white on-map yield |
+| buildTime | barrier 2 / relay 5 / extractor 6 / blaster 8 / beacon 28 (s) | v0.3 timed construction; miner 6 (v0.4) |
 | damage HP | extractor 120 / blaster 80 / relay 55 | max HP per type (toughness order) |
 | damage startDepth | extractor 5.0 / blaster 3.0 / relay 2.4 | depth where HP loss begins |
 | damage rate | extractor 3.2 / blaster 4.5 / relay 6.0 | HP/s lost per unit depth past start; lethalDepth 8.0 (readout label) |
@@ -174,7 +220,8 @@ Focus of the version: make live state read at a glance, anchored by a real damag
 | blaster | range 5, 0.85 depth/shot, 4/s, 1.1 e/shot | |
 | beacon | draw 9/s, charge 3.5%/s | ≈ 29s of uptime to win |
 | costs | extractor 55 / relay 25 / blaster 80 / barrier 10 / beacon 300 | refund 50% |
-| startEnergy | 260 | |
+| startEnergy | 200 | v0.3: ↓ from 260 (deliberate opening) |
+| coreIncome | 1.0 /s | v0.3: ↓ from 1.5 |
 
 ## Backlog / ideas for future versions
 - Sound (WebAudio synth, no assets) for shots/flooding/win.

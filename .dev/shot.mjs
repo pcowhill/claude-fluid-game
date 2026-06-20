@@ -1,7 +1,7 @@
 // Visual self-test harness (DEV ONLY; not part of the game and not required to play).
 // Requires a globally-installed Playwright + Chromium. Usage:
 //   node .dev/shot.mjs <out.png> [scenario]
-// Scenarios: howto | baseline | spread | play | hero | beacon | win
+// Scenarios: howto | baseline | spread | build | play | hero | beacon | win
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -40,6 +40,19 @@ if (scenario === 'howto') {
 } else if (scenario === 'spread') {
   await dismiss();
   await run(() => HTH.emitterFill(400));
+} else if (scenario === 'build') {
+  // v0.3 showcase: timed, serialized construction — a relay line building segment by segment.
+  await dismiss();
+  await run(() => {
+    HTH.setEnergy(99999);
+    HTH.place('relay', 9, 16);   // links to Core -> builds first
+    HTH.place('relay', 16, 16);  // waits for #1, then builds
+    HTH.place('relay', 23, 16);  // waits for #2 ...
+    HTH.place('relay', 30, 16);
+    HTH.place('relay', 37, 16);
+    HTH.place('extractor', 31, 14); // a side blueprint, still waiting for the line to reach it
+    HTH.step(130);               // ~13s: first relays done, the next mid-build, the rest waiting
+  });
 } else if (scenario === 'play') {
   await dismiss();
   await run(() => {
@@ -58,6 +71,7 @@ if (scenario === 'howto') {
     HTH.place('blaster', 24, 16);
     // dam: barriers across a basin mouth
     for (let r=12;r<=20;r++) HTH.place('barrier', 36, r);
+    HTH.finishBuilds();   // skip the construction wait for this built-out-board scenario
     HTH.emitterFill(500);
     HTH.step(150);
     HTH.setEnergy(800);
@@ -74,6 +88,7 @@ if (scenario === 'howto') {
     HTH.place('extractor', 33, 18);
     HTH.place('extractor', 37, 14);
     HTH.place('beacon', 43, 16);
+    HTH.finishBuilds();
     HTH.emitterFill(450);
     HTH.step(200);
     if (HTH.state) { /* charge will progress */ }
@@ -97,6 +112,7 @@ if (scenario === 'howto') {
     HTH.place('blaster', 33, 20);
     // The objective, placed deep in the basin
     HTH.place('beacon', 44, 16);
+    HTH.finishBuilds();    // mid-game showcase: structures already up, now under flood pressure
     // Let the world settle into a believable mid-game with real flood pressure
     HTH.emitterFill(700);
     HTH.step(120);         // flood rises + structures in the reservoir accrue damage
@@ -117,6 +133,7 @@ if (scenario === 'howto') {
     HTH.place('relay', 11, 16); HTH.place('relay', 19, 16); HTH.place('relay', 27, 16);
     HTH.place('relay', 34, 16); HTH.place('relay', 39, 16);
     HTH.place('beacon', 43, 16);
+    HTH.finishBuilds();        // bring the supply line + beacon online for the win check
     HTH.emitterFill(150);
     HTH.setBeaconCharge(95);   // near-win; supply line stays up long enough to finish
     HTH.setEnergy(99999);

@@ -2,6 +2,32 @@
 
 All notable changes to **Harvest the Hazard**. One entry per released version.
 
+## v0.3 — 2026-06-20
+Pacing & difficulty pass. The old game could be won in ~10 seconds (instant relay line → drop
+Beacon → fast-forward). v0.3 makes it a deliberate, multi-minute game at a MEDIUM difficulty.
+
+- **Timed, sequential construction (the main anti-rush change).** Placing a structure now drops a
+  **blueprint** that constructs over time. A network blueprint only *starts* building once it's within
+  link range of an already-**completed**, connected structure (the Core counts) — and while building it
+  is inactive and does **not** extend the network. So a relay line builds **one segment at a time**
+  (relay #1 finishes before #2 can start), which is what stops you spanning the map in seconds. Barriers
+  (off-network walls) build on their own and only start blocking fluid once finished.
+  - Clear build readout: a **radial progress ring** over a dimmed "under construction" ghost — cyan with
+    a live `%` while building, grey `wait` while a blueprint is still waiting for the network to reach it.
+  - Per-type build time lives in `CONFIG.buildTime` (scales with cost: Barrier ~2s … Beacon ~28s). The
+    Beacon builds too and only begins charging once complete. The Core starts pre-built.
+  - Cost is charged when placed; selling/cancelling a blueprint (even mid-build) gives the normal refund.
+- **Slower energy economy.** `startEnergy` 260→200, `coreIncome` 1.5→1.0, `extractorYield` 2.3→1.8,
+  cap 34→24 — so you can't buy a whole board-spanning build-out up front; the opening is deliberate.
+- **Readability fix:** the floating Extractor yield number is now **white** (was amber `#ffd982`, too
+  close to the Extractor's own orange) — still with its dark outline so it stays legible over the fluid.
+- **Kept intact:** all v0.2 features (depth-scaled fluid damage, per-structure HP + health bars, the
+  Repair tool, floating yields, the hover depth/risk readout), the green→blue→purple fluid style, the
+  terrain/elevations, and the win/lose conditions.
+- Updated the how-to panel (construction), refreshed `DESIGN.md`, added `snapshots/v0.3.png`, and
+  extended the self-test (`.dev/shot.mjs`): a new **`build`** scenario showcasing segment-by-segment
+  construction, a `finishBuilds()` test hook, and blueprint state in the dump.
+
 ## v0.2 — 2026-06-20
 Readability pass, anchored by a real flood-damage threat. The headline: live state — fluid depth,
 Extractor yield, and especially **building health** — now reads at a glance.
