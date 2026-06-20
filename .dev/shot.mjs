@@ -84,27 +84,32 @@ if (scenario === 'howto') {
   await dismiss();
   await run(() => {
     HTH.setEnergy(99999);
-    // Backbone of relays from the Core toward the basin
-    HTH.place('relay', 10, 16); HTH.place('relay', 16, 13); HTH.place('relay', 22, 19);
-    HTH.place('relay', 28, 14); HTH.place('relay', 34, 17); HTH.place('relay', 39, 16);
-    // Harvesters: spread across the lowland and basin edge (deeper = more, riskier)
-    HTH.place('extractor', 25, 12); HTH.place('extractor', 26, 20);
-    HTH.place('extractor', 31, 16); HTH.place('extractor', 35, 14);
-    HTH.place('extractor', 38, 18);
-    // Blasters guarding the corridor
-    HTH.place('blaster', 21, 13); HTH.place('blaster', 33, 20);
-    // A dam: levee across part of the basin mouth to grow a deep reservoir
-    for (let r = 10; r <= 22; r++) HTH.place('barrier', 37, r);
+    // Backbone of relays from the Core toward the basin (routed along higher ground)
+    HTH.place('relay', 10, 16); HTH.place('relay', 16, 13); HTH.place('relay', 22, 14);
+    HTH.place('relay', 28, 14); HTH.place('relay', 34, 16); HTH.place('relay', 38, 16);
+    // Harvesters across the lowland / basin edge (deeper = more, riskier)
+    HTH.place('extractor', 31, 16); HTH.place('extractor', 35, 14); HTH.place('extractor', 35, 18);
+    // A dam: levee sealing the basin mouth to grow a deep, lethal reservoir
+    for (let r = 5; r <= 27; r++) HTH.place('barrier', 40, r);
+    // Harvesters INSIDE the deep reservoir, hard against the Emitter (heavily flooded)
+    HTH.place('extractor', 43, 14); HTH.place('extractor', 43, 18);
+    // Blaster guarding the corridor
+    HTH.place('blaster', 33, 20);
     // The objective, placed deep in the basin
     HTH.place('beacon', 44, 16);
-    // Let the world settle into a believable mid-game
+    // Let the world settle into a believable mid-game with real flood pressure
     HTH.emitterFill(700);
-    HTH.step(120);
-    HTH.setEnergy(640);
+    HTH.step(120);         // flood rises + structures in the reservoir accrue damage
+    // Showcase the repair mechanic: pump a deep, damaged extractor
+    HTH.repairAt(43, 14, true);
+    HTH.setEnergy(720);
     HTH.setBeaconCharge(43);
+    selectTool('repair');  // clean green hover highlight for the snapshot
   });
-  // run live briefly so blasters fire on-screen
-  await page.waitForTimeout(500);
+  // hover the repairing extractor to surface depth/risk/health in the shot;
+  // brief live run lets pulses animate and the HUD reflect the repair draw
+  await page.mouse.move(20 + 43.5 * 20, 86 + 14.5 * 20);
+  await page.waitForTimeout(180);
 } else if (scenario === 'win') {
   await dismiss();
   await run(() => {
@@ -112,9 +117,10 @@ if (scenario === 'howto') {
     HTH.place('relay', 11, 16); HTH.place('relay', 19, 16); HTH.place('relay', 27, 16);
     HTH.place('relay', 34, 16); HTH.place('relay', 39, 16);
     HTH.place('beacon', 43, 16);
-    HTH.emitterFill(200);
+    HTH.emitterFill(150);
+    HTH.setBeaconCharge(95);   // near-win; supply line stays up long enough to finish
     HTH.setEnergy(99999);
-    HTH.step(400); // enough powered time to reach 100%
+    HTH.step(30);              // ~3s of powered charge -> crosses 100%
   });
   await page.waitForTimeout(100);
 }
@@ -133,11 +139,22 @@ const st = await run(() => {
   // depth right at the emitter and a couple sample lowland cells
   const C=cfg.cols;
   const at=(c,r)=>+d[r*C+c].toFixed(2);
+  // structure-health summary (v0.2): lowest HP by type + how many are taking damage
+  const ss = HTH.structs();
+  const byType = {};
+  let damaging = 0, repairing = 0;
+  for (const x of ss) {
+    if (x.hp == null) continue;
+    if (!byType[x.t]) byType[x.t] = { n:0, minHp: Infinity };
+    byType[x.t].n++; byType[x.t].minHp = Math.min(byType[x.t].minHp, +x.hp.toFixed(0));
+    if ((x.dps||0) > 0) damaging++;
+    if (x.rep) repairing++;
+  }
   return { energy: Math.round(s.energy), income:+s.income.toFixed(1), cons:+s.cons.toFixed(1),
            over:s.over, time:+s.time.toFixed(0),
            maxDepth:+max.toFixed(2), wetCells:wet, totalFluid:+sum.toFixed(0),
            dEmitter:at(cfg.emitter.c,cfg.emitter.r), dMidLow:at(28,16), dNearCore:at(11,16),
-           beaconCharge: window.__bc };
+           beaconCharge: HTH.beaconCharge(), hp: byType, damaging, repairing };
 });
 console.log('STATE=' + JSON.stringify(st));
 await browser.close();

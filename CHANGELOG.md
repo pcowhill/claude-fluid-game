@@ -2,6 +2,30 @@
 
 All notable changes to **Harvest the Hazard**. One entry per released version.
 
+## v0.2 — 2026-06-20
+Readability pass, anchored by a real flood-damage threat. The headline: live state — fluid depth,
+Extractor yield, and especially **building health** — now reads at a glance.
+
+- **Gradual, depth-scaled fluid damage on all structures.** Replaced v0.1's instant, Extractor-only
+  destroy threshold (which the basin rarely reached) with continuous damage: when fluid on a
+  structure's own cell passes a per-type threshold it loses HP over time, faster the deeper it gets,
+  and is destroyed at 0 HP. Toughness order **Extractor > Blaster > Relay**. The **Beacon is immune**;
+  the **Core is unchanged** (still an instant loss if submerged); Barriers stay dry (walls).
+- **Health bars** on every damageable structure (green → amber → red), so accumulating damage is
+  obvious well before destruction. Structures actively taking damage flash a red outline + `!`.
+- **Repair mechanic.** New **Repair** toolbar tool toggles a "repair pump" on a damaged structure —
+  heals HP over time and spends energy per HP, auto-stopping at full. Damage isn't permanent loss.
+- **Floating Extractor yield numbers** drawn on the map (live energy/s per Extractor).
+- **Hover readout.** A cursor tooltip shows the exact fluid **depth**, the **risk level**
+  (Dry → Shallow → Deep → Hazardous → Lethal), and, over a structure, its type / HP% / yield.
+- **Flood escalation.** `emitterRate` 7→10 and `basinPrefill` 2.6→3.6 so deep fluid genuinely reaches
+  and threatens the structures you build, sooner.
+- **Kept intact:** the green→blue→purple depth fluid style, the map/terrain & elevations, the win
+  (charge Beacon 100%) and lose (Core submerged) conditions, and the mouse-only build toolbar.
+- Updated the how-to panel (health/damage/repair), refreshed `DESIGN.md`, added `snapshots/v0.2.png`,
+  and extended the dev self-test (`.dev/shot.mjs`): structure-HP state dump + a damage/repair `hero`
+  showcase.
+
 ## v0.1 — 2026-06-19
 First playable build. Minimal but complete core loop.
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Harvest the Hazard — v0.1</title>
+<title>Harvest the Hazard — v0.2</title>
 <style>
   :root{
     --bg:#0a0d13;
@@ -47,6 +47,14 @@
   /* ---------- Canvas ---------- */
   #board{position:relative;}
   canvas{display:block;background:#070a0f;border:1px solid var(--line);border-radius:10px;cursor:crosshair;}
+  /* Hover readout (depth + risk under the cursor) */
+  #celltip{position:absolute;left:0;top:0;display:none;pointer-events:none;z-index:6;
+    transform:translate(-50%,calc(-100% - 14px));background:rgba(8,12,20,.94);
+    border:1px solid var(--line);border-radius:7px;padding:5px 9px;font-size:11px;line-height:1.4;
+    color:var(--text);white-space:nowrap;box-shadow:0 6px 18px rgba(0,0,0,.55);}
+  #celltip .ct-risk{font-weight:800;letter-spacing:.01em;}
+  #celltip .ct-row{color:var(--muted);font-variant-numeric:tabular-nums;}
+  #celltip .ct-row b{color:var(--text);}
 
   /* ---------- Toolbar ---------- */
   #toolbar{width:960px;max-width:100%;background:var(--panel);border:1px solid var(--line);
@@ -60,6 +68,7 @@
   .tool .tdesc{font-size:10px;color:var(--muted);line-height:1.25;}
   .tool .swatch{width:11px;height:11px;border-radius:3px;display:inline-block;}
   .tool.del .tname{color:var(--red);} .tool.del .swatch{background:var(--red);}
+  .tool.rep .tname{color:var(--green);}
   .tool.cant{opacity:.5;}
 
   #hint{width:960px;max-width:100%;color:var(--muted);font-size:12px;text-align:center;min-height:16px;}
@@ -111,6 +120,7 @@
   <!-- Game board -->
   <div id="board">
     <canvas id="cv"></canvas>
+    <div id="celltip"></div>
   </div>
 
   <!-- Build toolbar (populated by JS) -->
@@ -125,11 +135,12 @@
     <h2>The hazard is your enemy — and your only fuel.</h2>
     <p>A glowing fluid floods out of the <b style="color:var(--purple)">Emitter</b> in the low basin and spreads downhill, pooling deep. You don't want to wipe it out — you want to <b>farm a controlled flood.</b></p>
     <ul>
-      <li><b style="color:var(--amber)">Extractors</b> turn fluid into energy. <span class="key">Deeper fluid = more energy</span> — but too deep and the fluid <span class="danger">destroys them.</span></li>
-      <li><b style="color:var(--cyan)">Relays</b> extend your network so you can reach distant ground. Everything must stay <b>connected</b> to the Core to work.</li>
+      <li><b style="color:var(--amber)">Extractors</b> turn fluid into energy. <span class="key">Deeper fluid = more energy</span> — but deep fluid <span class="danger">damages structures over time</span> (watch the <b>health bars</b>). Extractors are the toughest.</li>
+      <li><b style="color:var(--cyan)">Relays</b> extend your network to distant ground — but they're fragile, so keep them dry. Everything must stay <b>connected</b> to the Core.</li>
       <li><b style="color:var(--red)">Blasters</b> burn energy to push fluid back and protect your line.</li>
       <li><b style="color:#9aa3b2">Barriers</b> are cheap walls — <b>dam a basin</b> to grow a deep, lucrative reservoir.</li>
-      <li><b class="obj">Beacon</b> — build it in the deadly basin and keep it powered to charge it. <span class="obj">Charge it to 100% to WIN.</span></li>
+      <li><b style="color:var(--green)">Repair</b> spends energy to heal a damaged structure — toggle a repair pump from the toolbar so flood damage isn't permanent.</li>
+      <li><b class="obj">Beacon</b> — build it in the deadly basin and keep it powered. It's <b>immune</b> to the fluid. <span class="obj">Charge it to 100% to WIN.</span></li>
     </ul>
     <p><b class="danger">You lose if the fluid submerges your Core Base.</b> Keep it off the high ground!</p>
     <button class="bigbtn" id="btnStart">Start Harvesting</button>
@@ -160,7 +171,7 @@
 <script>
 "use strict";
 /* =====================================================================================
-   HARVEST THE HAZARD  —  v0.1
+   HARVEST THE HAZARD  —  v0.2
    Single-file vanilla JS + Canvas. No dependencies. Open index.html directly.
    ALL tunable gameplay numbers live in CONFIG below.
    ===================================================================================== */
@@ -176,8 +187,8 @@ const CONFIG = {
 
   /* ---- Fluid simulation ---- */
   fluidTickMs: 100,        // one cellular-automaton step every 100ms at 1x (10 ticks/s)
-  emitterRate: 7.0,        // fluid depth added at the Emitter cell per second
-  basinPrefill: 2.6,       // basin (elev 0) starts pre-flooded to this depth: instant deep hazard
+  emitterRate: 10.0,       // fluid depth added at the Emitter cell per second (v0.2: faster escalation)
+  basinPrefill: 3.6,       // basin (elev 0) starts pre-flooded to this depth: instant deep hazard
   flowRate: 0.25,          // share of surface-difference that flows per tick (<=0.25 keeps it stable)
   minDepth: 0.0008,        // denormal guard only (mass is conserved; do NOT cull the flood front)
   fluidRenderMin: 0.05,    // fluid shallower than this is invisible (render-only, no mass loss)
@@ -189,10 +200,23 @@ const CONFIG = {
   extractorYield: 2.3,     // energy/s per unit of fluid depth under an Extractor
   extractorYieldCap: 34,   // max energy/s a single Extractor can produce
 
-  /* ---- Risk thresholds (fluid depth) ---- */
-  riskDepth: 4.5,          // Extractor enters flashing "at risk" state at/above this depth
-  destroyDepth: 7.5,       // Extractor is destroyed at/above this depth
-  coreSubmergeDepth: 0.8,  // Core is lost when fluid depth on its cell reaches this
+  /* ---- Fluid damage to structures (gradual, depth-scaled) ----
+     A structure takes damage when the fluid on ITS OWN cell is deeper than startDepth[type];
+     the deeper the fluid, the faster it loses HP; at 0 HP it is destroyed. Extractors tolerate
+     the deepest fluid (toughest), Relays the least. The Beacon is IMMUNE (no entry here), the
+     Core is unaffected (it has its own instant-submerge loss), and Barriers stay dry (walls). */
+  damage: {
+    hp:         { extractor: 120, relay: 55,  blaster: 80  }, // max health per structure type
+    startDepth: { extractor: 5.0, relay: 2.4, blaster: 3.0 }, // fluid depth at which damage begins
+    rate:       { extractor: 3.2, relay: 6.0, blaster: 4.5 }, // HP/s lost per unit of depth past start
+    lethalDepth: 8.0,        // depth labelled "lethal" in the hover risk readout
+  },
+  /* ---- Repair (spend energy to heal damaged structures) ---- */
+  repair: {
+    rate: 28,                // HP/s restored while a repair pump is running
+    costPerHp: 0.7,          // energy spent per HP restored
+  },
+  coreSubmergeDepth: 0.8,    // Core is lost when fluid depth on its cell reaches this
 
   /* ---- Blaster ---- */
   blasterRange: 5.0,       // cells
@@ -297,12 +321,13 @@ function buildTerrain() {
    STRUCTURE DEFINITIONS
    ===================================================================================== */
 const NETWORK_TYPES = { core:1, extractor:1, relay:1, blaster:1, beacon:1 };
+const DAMAGEABLE = { extractor:1, relay:1, blaster:1 }; // take gradual fluid damage; have HP + health bars
 const TOOLS = [
-  { type:'extractor', name:'Extractor', color:'#ffb24a', desc:'Harvests fluid → energy. Deeper = more, but floods.' },
-  { type:'relay',     name:'Relay',     color:'#3fe0d0', desc:'Extends network range. Produces nothing.' },
+  { type:'extractor', name:'Extractor', color:'#ffb24a', desc:'Harvests fluid → energy. Deeper = more, toughest vs flood.' },
+  { type:'relay',     name:'Relay',     color:'#3fe0d0', desc:'Extends network range. Fragile — keep it dry.' },
   { type:'blaster',   name:'Blaster',   color:'#ff6b5e', desc:'Burns energy to push fluid back.' },
   { type:'barrier',   name:'Barrier',   color:'#9aa3b2', desc:'Cheap wall. Dam basins / block flow.' },
-  { type:'beacon',    name:'Beacon',    color:'#ffe27a', desc:'WIN objective. Build in basin, keep powered.' },
+  { type:'beacon',    name:'Beacon',    color:'#ffe27a', desc:'WIN objective. Immune to fluid. Keep powered.' },
 ];
 
 /* =====================================================================================
@@ -335,7 +360,9 @@ function placeStructure(type, c, r) {
     occ[i] = s;
     structures.push(s);
   } else {
-    const s = { type, c, r, active:false, cooldown:0, target:null, charge:0 };
+    const s = { type, c, r, active:false, cooldown:0, target:null, charge:0,
+                hp: DAMAGEABLE[type] ? CONFIG.damage.hp[type] : 0, repairing:false,
+                dps:0, yield:0 };
     if (type === 'beacon') beacon = s;
     occ[i] = s;
     structures.push(s);
@@ -431,20 +458,46 @@ function simStep(dt) {
 
   // --- Income from Extractors (yield scales with fluid depth) + Core passive ---
   let income = CONFIG.coreIncome;
+  let cons = 0;
   const destroyed = [];
   for (const s of structures) {
     if (s.type === 'extractor') {
       const d = depth[idx(s.c, s.r)];
-      s.flooding = d >= CONFIG.riskDepth;
-      if (d >= CONFIG.destroyDepth) { destroyed.push(s); continue; }
-      if (s.active && d > 0) {
-        income += Math.min(CONFIG.extractorYield * d, CONFIG.extractorYieldCap);
-      }
+      const y = (s.active && d > 0) ? Math.min(CONFIG.extractorYield * d, CONFIG.extractorYieldCap) : 0;
+      s.yield = y;          // exposed for the floating on-map number
+      income += y;
     }
   }
   game.energy += income * dt;
 
-  // --- Remove flooded-out Extractors ---
+  // --- Gradual fluid damage + player repair on damageable structures ---
+  //   Damage applies when fluid on the structure's OWN cell is deeper than startDepth[type];
+  //   the deeper the fluid the faster HP drains. A running repair pump heals over time and
+  //   burns energy. A structure can be damaged and repaired at once (you're bailing water).
+  for (const s of structures) {
+    if (!DAMAGEABLE[s.type]) continue;
+    const maxHp = CONFIG.damage.hp[s.type];
+    const d = depth[idx(s.c, s.r)];
+    const start = CONFIG.damage.startDepth[s.type];
+    const dps = d > start ? CONFIG.damage.rate[s.type] * (d - start) : 0;
+    s.dps = dps;            // >0 means actively taking damage (drives the at-risk flash)
+    if (dps > 0) s.hp -= dps * dt;
+    if (s.repairing) {
+      if (s.hp >= maxHp) { s.repairing = false; }
+      else if (game.energy > 0) {
+        const heal = Math.min(CONFIG.repair.rate * dt, maxHp - s.hp, game.energy / CONFIG.repair.costPerHp);
+        if (heal > 0) {
+          s.hp += heal;
+          game.energy -= heal * CONFIG.repair.costPerHp;
+          cons += CONFIG.repair.rate * CONFIG.repair.costPerHp; // approx /s rate for the HUD
+        }
+        if (s.hp >= maxHp) { s.hp = maxHp; s.repairing = false; }
+      }
+    }
+    if (s.hp <= 0) { s.hp = 0; destroyed.push(s); }
+  }
+
+  // --- Remove destroyed structures (flooded past 0 HP) ---
   for (const s of destroyed) {
     occ[idx(s.c, s.r)] = null;
     structures = structures.filter(x => x !== s);
@@ -452,7 +505,6 @@ function simStep(dt) {
   if (destroyed.length) recomputeNetwork();
 
   // --- Blasters: auto-fire at deepest (tiebreak nearest) fluid in range ---
-  let cons = 0;
   const range = CONFIG.blasterRange, fireGap = 1 / CONFIG.blasterFireRate;
   for (const s of structures) {
     if (s.type !== 'blaster') continue;
@@ -517,6 +569,7 @@ function endGame(result) {
   if (game.over) return;
   game.over = result;
   game.paused = true;
+  document.getElementById('celltip').style.display = 'none';
   const mm = Math.floor(game.time / 60), ss = Math.floor(game.time % 60);
   const tstr = mm + 'm ' + (ss < 10 ? '0' : '') + ss + 's';
   if (result === 'win') {
@@ -702,19 +755,45 @@ function drawStructure(s) {
 
   ctx.restore();
 
-  // at-risk Extractor warning (drawn full opacity, on top)
-  if (s.type === 'extractor' && s.flooding) {
+  // --- Repair pump running: green pulsing ring ---
+  if (s.repairing) {
+    const p = pulse();
+    ctx.strokeStyle = 'rgba(93,212,123,' + (0.55+0.45*p).toFixed(2) + ')';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(cx, cy, PX*0.5, 0, Math.PI*2); ctx.stroke();
+  }
+
+  // --- At-risk flash: any damageable structure currently taking fluid damage ---
+  if (DAMAGEABLE[s.type] && s.dps > 0) {
     const p = pulse();
     ctx.strokeStyle = 'rgba(255,70,70,' + (0.5+0.5*p).toFixed(2) + ')';
     ctx.lineWidth = 2.5; roundRect(x+1,y+1,PX-2,PX-2,4); ctx.stroke();
-    ctx.fillStyle = 'rgba(255,80,80,' + (0.7+0.3*p).toFixed(2) + ')';
+    ctx.fillStyle = 'rgba(255,90,90,' + (0.7+0.3*p).toFixed(2) + ')';
     ctx.font = 'bold 13px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText('!', cx, cy-PX*0.02);
   }
-  // inactive marker
+
+  // --- Inactive (disconnected) marker ---
   if (inactive) {
     ctx.strokeStyle = 'rgba(255,90,90,0.7)'; ctx.lineWidth = 1.5;
     ctx.setLineDash([3,3]); roundRect(x+1,y+1,PX-2,PX-2,4); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // --- Health bar on every damageable structure (the headline readability feature) ---
+  if (DAMAGEABLE[s.type]) {
+    const maxHp = CONFIG.damage.hp[s.type], frac = clamp(s.hp / maxHp, 0, 1);
+    const bw = PX-6, bh = 3, bx = x+3, by = y+1.5;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(bx-1, by-1, bw+2, bh+2);
+    ctx.fillStyle = frac > 0.6 ? '#5dd47b' : frac > 0.3 ? '#ffb24a' : '#ff5a4a';
+    ctx.fillRect(bx, by, bw*frac, bh);
+  }
+
+  // --- Floating energy yield on producing Extractors ---
+  if (s.type === 'extractor' && s.active && s.yield > 0.05) {
+    const txt = '+' + (s.yield >= 10 ? Math.round(s.yield) : s.yield.toFixed(1));
+    ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillText(txt, cx+0.5, y+PX-2+0.5);
+    ctx.fillStyle = '#ffd982'; ctx.fillText(txt, cx, y+PX-2);
   }
 }
 
@@ -725,6 +804,13 @@ function drawHover() {
   if (game.tool === 'delete') {
     const s = occ[idx(c,r)];
     ctx.strokeStyle = s && s.type!=='core' ? 'rgba(255,90,90,0.9)' : 'rgba(255,90,90,0.3)';
+    ctx.lineWidth = 2; roundRect(x+1,y+1,PX-2,PX-2,4); ctx.stroke();
+    return;
+  }
+  if (game.tool === 'repair') {
+    const s = occ[idx(c,r)];
+    const ok = s && DAMAGEABLE[s.type];
+    ctx.strokeStyle = ok ? 'rgba(93,212,123,0.95)' : 'rgba(93,212,123,0.3)';
     ctx.lineWidth = 2; roundRect(x+1,y+1,PX-2,PX-2,4); ctx.stroke();
     return;
   }
@@ -778,6 +864,44 @@ function updateBeaconHud() {
   } else el.style.display = 'none';
 }
 
+/* ---- Hover readout: exact fluid depth + risk level at the cell under the cursor ---- */
+function riskInfo(d) {
+  const relayS = CONFIG.damage.startDepth.relay;
+  const extS   = CONFIG.damage.startDepth.extractor;
+  const lethal = CONFIG.damage.lethalDepth;
+  if (d < CONFIG.fluidRenderMin) return { label:'Dry ground',  color:'#8493ac' };
+  if (d < relayS)               return { label:'Shallow — safe', color:'#5dd47b' };
+  if (d < extS)                 return { label:'Deep — harvest zone', color:'#ffb24a' };
+  if (d < lethal)               return { label:'Hazardous', color:'#ff6b5e' };
+  return { label:'Lethal', color:'#b06bff' };
+}
+function updateCellTip(e) {
+  const tip = $('celltip');
+  const { c, r } = game.hover;
+  if (game.over || !inb(c, r)) { tip.style.display = 'none'; return; }
+  const i = idx(c, r), d = depth[i], rk = riskInfo(d);
+  let html = '<div class="ct-risk" style="color:' + rk.color + '">' + rk.label + '</div>' +
+             '<div class="ct-row">Depth <b>' + d.toFixed(2) + '</b> · Elev ' + elev[i] + '</div>';
+  const s = occ[i];
+  if (s && DAMAGEABLE[s.type]) {
+    const pct = Math.max(0, Math.round(s.hp / CONFIG.damage.hp[s.type] * 100));
+    const extra = (s.type === 'extractor' && s.yield > 0.05) ? ' · +' + s.yield.toFixed(1) + '/s' : '';
+    html += '<div class="ct-row"><b style="text-transform:capitalize">' + s.type + '</b> · HP ' + pct + '%' + extra +
+            (s.repairing ? ' · <span style="color:#5dd47b">repairing</span>' : '') + '</div>';
+  } else if (s && s.type === 'beacon') {
+    html += '<div class="ct-row"><b>Beacon</b> · immune · ' + Math.floor(s.charge) + '%</div>';
+  } else if (s && s.type === 'core') {
+    html += '<div class="ct-row"><b>Core</b> · lose if submerged</div>';
+  } else if (s && s.type === 'barrier') {
+    html += '<div class="ct-row"><b>Barrier</b> · blocks fluid</div>';
+  }
+  tip.innerHTML = html;
+  const br = document.getElementById('board').getBoundingClientRect();
+  tip.style.left = (e.clientX - br.left) + 'px';
+  tip.style.top  = (e.clientY - br.top) + 'px';
+  tip.style.display = 'block';
+}
+
 /* =====================================================================================
    TOOLBAR / CONTROLS
    ===================================================================================== */
@@ -795,6 +919,14 @@ function buildToolbar() {
     el.onclick = () => selectTool(t.type);
     tb.appendChild(el);
   }
+  const rep = document.createElement('div');
+  rep.className = 'tool rep' + (game.tool==='repair'?' sel':'');
+  rep.dataset.type = 'repair';
+  rep.innerHTML = '<div class="tname"><span class="swatch" style="background:var(--green)"></span>Repair</div>'+
+                  '<div class="tcost" style="color:var(--green)">⚡ '+CONFIG.repair.costPerHp+' / HP</div>'+
+                  '<div class="tdesc">Toggle a repair pump on a damaged structure.</div>';
+  rep.onclick = () => selectTool('repair');
+  tb.appendChild(rep);
   const del = document.createElement('div');
   del.className = 'tool del' + (game.tool==='delete'?' sel':'');
   del.dataset.type = 'delete';
@@ -812,7 +944,7 @@ function selectTool(type) {
 function refreshToolAffordability() {
   document.querySelectorAll('.tool').forEach(el => {
     const t = el.dataset.type;
-    if (t==='delete') return;
+    if (CONFIG.cost[t] === undefined) return; // delete / repair have no build cost
     el.classList.toggle('cant', game.energy < CONFIG.cost[t]);
   });
 }
@@ -826,19 +958,28 @@ function cellFromEvent(e) {
   const y = (e.clientY - rect.top) * (BH / rect.height);
   return { c: Math.floor(x/PX), r: Math.floor(y/PX) };
 }
-cv.addEventListener('mousemove', e => { game.hover = cellFromEvent(e); });
-cv.addEventListener('mouseleave', () => { game.hover = { c:-1, r:-1 }; });
+cv.addEventListener('mousemove', e => { game.hover = cellFromEvent(e); updateCellTip(e); });
+cv.addEventListener('mouseleave', () => { game.hover = { c:-1, r:-1 }; $('celltip').style.display = 'none'; });
 cv.addEventListener('click', e => {
   if (game.over) return;
   const { c, r } = cellFromEvent(e);
   if (!inb(c,r)) return;
   if (game.tool === 'delete') { removeAt(c,r); }
+  else if (game.tool === 'repair') { tryRepair(c,r); }
   else {
     const v = placeValidity(game.tool, c, r);
     if (v.ok) { placeStructure(game.tool, c, r); }
     else { flashHint(v.reason); }
   }
 });
+
+// Repair tool: toggle a repair pump on a damaged structure (heals over time, costs energy).
+function tryRepair(c, r) {
+  const s = occ[idx(c, r)];
+  if (!s || !DAMAGEABLE[s.type]) { flashHint('Repair: click a damaged Extractor / Relay / Blaster'); return; }
+  if (s.hp >= CONFIG.damage.hp[s.type] && !s.repairing) { flashHint('Already at full health'); return; }
+  s.repairing = !s.repairing;
+}
 cv.addEventListener('contextmenu', e => {
   e.preventDefault();
   if (game.over) return;
@@ -930,6 +1071,8 @@ window.HTH = {
   beaconCharge:()=> beacon ? beacon.charge : null,
   setBeaconCharge:v=>{ if(beacon) beacon.charge=v; },
   emitterFill:(n)=>{ const dt=CONFIG.fluidTickMs/1000; for(let i=0;i<n;i++) fluidStep(dt); },
+  structs:()=> structures.map(s=>({t:s.type,c:s.c,r:s.r,hp:s.hp,active:s.active,y:s.yield,dps:s.dps,rep:s.repairing})),
+  repairAt:(c,r,on)=>{ const s=occ[idx(c,r)]; if(s&&DAMAGEABLE[s.type]) s.repairing = (on===undefined? !s.repairing : !!on); },
 };
 
 setupCanvas();

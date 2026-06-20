@@ -37,19 +37,40 @@ most lucrative, most lethal spot on the map.
   hazard is immediately deep and dangerous and begins spilling toward the player right away.
 
 ## Structures
-- **Core Base** — network root; stores energy; small passive income. **LOSE if it becomes submerged.**
+Every damageable structure has **HP** and takes **gradual, depth-scaled fluid damage** when the fluid
+on its own cell is deep enough (see *Fluid damage & repair*). All of them show a **health bar**, so
+accumulating damage is obvious well before destruction.
+
+- **Core Base** — network root; stores energy; small passive income. No HP / not damaged by fluid —
+  but **LOSE if it becomes submerged** (`coreSubmergeDepth` on its cell). Sits safe on a plateau.
 - **Extractor** *(centerpiece)* — harvests fluid into energy, yield ∝ fluid **depth** at its cell
-  (dry land = zero). At/above `riskDepth` it enters a flashing **at-risk/flooding** state; at/above
-  `destroyDepth` it is **destroyed**. Must be connected. *Harvesting does not drain the pool* — the
-  Emitter out-pressures any single Extractor, so depth keeps rising and the risk dial stays live.
-- **Relay** — produces nothing; long link range to extend the network to distant ground. Connected.
-- **Blaster** — when connected, auto-fires at the deepest (tiebreak nearest) fluid in range,
-  lowering its depth and consuming energy per shot; stops firing if stored energy is depleted.
-- **Barrier/Levee** — cheap; blocks fluid flow at its cell (acts like an infinite wall). Used to dam
-  basins into deep reservoirs and protect corridors. Permanent until removed.
-- **Beacon** — the win objective. Built in the basin (lowest elevation). Draws a steady amount of
-  energy to charge; charges only while that draw is met, pauses otherwise. **100% charge = WIN.** Not
-  destroyed by fluid; but you must defend its supply line and keep it powered.
+  (dry land = zero); the live yield floats as a number on the map. **Toughest** structure (highest HP,
+  deepest damage threshold) — but deep enough fluid still kills it. Must be connected. *Harvesting
+  does not drain the pool* — the Emitter out-pressures any single Extractor, so depth keeps rising and
+  the risk dial stays live.
+- **Relay** — produces nothing; long link range to extend the network to distant ground. **Fragile**
+  (lowest HP, lowest damage threshold) — route it over dry/high ground. Connected.
+- **Blaster** — when connected, auto-fires at the deepest (tiebreak nearest) fluid in range, lowering
+  its depth and consuming energy per shot; stops firing if stored energy is depleted. Middle toughness,
+  and can self-protect by suppressing nearby depth.
+- **Barrier/Levee** — cheap; blocks fluid flow at its cell (acts like an infinite wall; its own cell
+  stays dry, so it takes no damage). Used to dam basins into deep reservoirs and protect corridors.
+  Permanent until removed.
+- **Beacon** — the win objective. Built in the basin (lowest elevation). **Immune to fluid** (no HP
+  bar). Draws a steady amount of energy to charge; charges only while that draw is met, pauses
+  otherwise. **100% charge = WIN.** You must defend its supply line and keep it powered.
+
+## Fluid damage & repair (v0.2)
+- **Damage:** each tick, a damageable structure whose own-cell depth exceeds `damage.startDepth[type]`
+  loses HP at `damage.rate[type] × (depth − startDepth)` per second — the deeper the fluid, the faster
+  it dies. At 0 HP it is destroyed and removed (network recomputes). Tolerance ranking
+  **Extractor > Blaster > Relay**. The Beacon is exempt; the Core keeps its own instant-submerge loss.
+- **Health bars + at-risk flash:** every damageable structure draws a compact health bar
+  (green → amber → red); one actively losing HP also flashes a red outline + `!`.
+- **Repair:** the **Repair** tool toggles a "repair pump" on a damaged structure. While running it
+  restores `repair.rate` HP/s for `repair.costPerHp` energy per HP, auto-stopping at full HP (or when
+  energy runs out). A structure can be damaged and repaired at once — repair wins at shallow/moderate
+  depth, the flood wins if it's too deep. A green ring marks a running pump.
 
 ## Network & energy
 - Global stored-energy pool + per-second income from Extractors (scaled by depth) and the Core,
@@ -66,10 +87,15 @@ most lucrative, most lethal spot on the map.
 
 ## Controls & UI (mouse only)
 - Build toolbar to select a structure; click a valid cell to place; auto-connect if in range.
+- **Repair tool** — click a damaged structure to toggle its repair pump (heals over time, costs energy).
 - Right-click (or the Sell/Delete tool) removes a structure for a partial refund.
+- **Hover readout** — a tooltip follows the cursor showing the exact **fluid depth**, the **risk level**
+  (Dry → Shallow → Deep → Hazardous → Lethal), and, over a structure, its type / HP% / yield.
+- **On-map readouts** — a health bar on every damageable structure and a floating energy-yield number
+  on each producing Extractor.
 - Top bar: stored-energy meter, income vs. consumption, net/s, and the selected structure's cost.
-- Beacon charge meter appears once the Beacon is placed. Flashing `!` warnings on flooding Extractors.
-  Invalid placements show a red cell outline and a reason hint.
+- Beacon charge meter appears once the Beacon is placed. Flashing `!` warnings on structures taking
+  damage. Invalid placements show a red cell outline and a reason hint.
 - Pause button and a fast-forward toggle (1x / 2x / 3x); default 1x.
 - A dismissible "How to play" panel on first load explaining the core twist.
 
@@ -78,6 +104,9 @@ most lucrative, most lethal spot on the map.
   cliff shading. Fluid is a translucent glowing overlay whose opacity/hue track **depth**: toxic
   green (shallow) → blue → lethal purple (deep). Bright friendly shapes for structures, thin cyan
   lines for the network. No external assets.
+- **Live-state readability (v0.2)** is layered *on top* of the unchanged fluid style: per-structure
+  health bars, floating Extractor yield numbers, the cursor depth/risk readout, and the at-risk-flash /
+  repair-ring markers. The green→blue→purple fluid overlay itself is untouched.
 
 ---
 
@@ -105,17 +134,43 @@ These are reasonable calls made during the one-shot build where the spec left ro
 - A small `window.HTH` automation hook is exposed for the visual self-test harness (`.dev/shot.mjs`).
   It's harmless and aids the iterative playtest loop.
 
+## Implementation notes & decisions (v0.2)
+Focus of the version: make live state read at a glance, anchored by a real damage/repair system.
+
+- **Gradual damage replaces the old instant cutoff.** v0.1 had a single Extractor-only `destroyDepth`
+  (≈7.5) that the open basin rarely reached, so structures felt risk-free. v0.2 removes
+  `riskDepth`/`destroyDepth` and damages **all** damageable structures continuously, scaled by how far
+  the local depth exceeds a per-type threshold. Extractors are the toughest, Relays the most fragile.
+- **What is/isn't damageable.** Damageable = Extractor / Relay / Blaster (have HP + bars). The Beacon
+  is immune (no bar). The Core keeps its instant-submerge loss. Barriers are walls whose own cell is
+  forced dry, so they can never take fluid damage — intentionally no HP bar.
+- **Repair is a player-toggled pump, not auto-heal.** It spends from the global energy pool over time
+  (rate + cost knobs) and is allowed even on disconnected structures (you're bailing water); it can run
+  while the cell is still flooded, which is the core tension. Added as a toolbar tool beside Sell/Delete
+  to respect "don't change the control scheme/toolbar paradigm" (mouse-only, click-a-cell).
+- **Readability is additive.** Health bars, floating Extractor yields, the at-risk flash, the repair
+  ring, and the cursor depth/risk tooltip are all drawn on top; the green→blue→purple fluid overlay,
+  the terrain/elevations, and the win/lose conditions are untouched per the brief.
+- **Flood escalation.** Bumped `emitterRate` 7→10 and `basinPrefill` 2.6→3.6 (kept `flowRate` at the
+  0.25 stability cap) so the basin climbs past the Extractor threshold during normal play and reaches
+  the structures players actually build. The Core remains hard to submerge by design (plateau backstop).
+- **Damage `s.yield`/`s.dps`/`s.hp` fields** are exposed via `window.HTH.structs()` for the self-test
+  state dump; the harness `hero` scenario now showcases a mid-repair, deeply-flooded reservoir.
+
 ## Tuning quick-reference (current `CONFIG`)
 | Knob | Value | Notes |
 |------|-------|-------|
 | grid | 48×32 @ 20px | board 960×640 |
 | levelHeight | 1.6 | depth needed to climb one elevation step |
-| emitterRate | 7.0 /s | flood pressure / escalation speed |
-| basinPrefill | 2.6 | starting basin depth (instant hazard) |
+| emitterRate | 10.0 /s | flood pressure / escalation speed (v0.2: ↑ from 7.0) |
+| basinPrefill | 3.6 | starting basin depth / instant hazard (v0.2: ↑ from 2.6) |
 | flowRate | 0.25 | per-tick share of surface diff (≤0.25 = stable) |
-| extractorYield | 2.3 /depth/s | cap 34/s |
-| riskDepth / destroyDepth | 4.5 / 7.5 | natural basin equilibrium ≈ 4.2; damming → ≈ 6+ |
-| coreSubmergeDepth | 0.8 | lose threshold on the Core cell |
+| extractorYield | 2.3 /depth/s | cap 34/s; live yield shown on-map |
+| damage HP | extractor 120 / blaster 80 / relay 55 | max HP per type (toughness order) |
+| damage startDepth | extractor 5.0 / blaster 3.0 / relay 2.4 | depth where HP loss begins |
+| damage rate | extractor 3.2 / blaster 4.5 / relay 6.0 | HP/s lost per unit depth past start; lethalDepth 8.0 (readout label) |
+| repair | 28 HP/s, 0.7 energy/HP | repair-pump heal rate + cost |
+| coreSubmergeDepth | 0.8 | lose threshold on the Core cell (unchanged) |
 | blaster | range 5, 0.85 depth/shot, 4/s, 1.1 e/shot | |
 | beacon | draw 9/s, charge 3.5%/s | ≈ 29s of uptime to win |
 | costs | extractor 55 / relay 25 / blaster 80 / barrier 10 / beacon 300 | refund 50% |
